@@ -10,7 +10,10 @@ For ordinary Chinese prose and table cells, these are normally safe to remove or
 - multiple consecutive ordinary spaces that do not express intentional alignment;
 - spaces between adjacent Han characters;
 - spaces immediately before Chinese punctuation;
-- spaces immediately after opening Chinese punctuation or before closing punctuation;
+- spaces immediately after Chinese punctuation when followed by visible text;
+- spaces immediately before opening Chinese brackets/quotes;
+- spaces immediately after opening Chinese punctuation;
+- full-width spaces, NBSP and zero-width whitespace adjacent to Chinese prose when they have no semantic purpose;
 - accidental leading/trailing spaces inside a cell;
 - repeated empty paragraphs with no visual purpose.
 
@@ -35,18 +38,21 @@ For ordinary Chinese prose, avoid accidental spaces around punctuation such as:
 
 `，。；：！？、）】》」』`
 
-and after opening punctuation such as:
+and around opening punctuation such as:
 
-`（【《「『`
+`（【《「『“‘`
 
 Do not blindly rewrite quoted source text or code-like content.
 
 ## DOCX caution
 
-Visible text can be split across multiple Word runs. A phrase that looks contiguous on screen may live in several `<w:r>` elements. Do not rebuild an entire paragraph into one run merely to delete a space because that can destroy mixed formatting, hyperlinks, fields, tracked changes, or comments.
+Visible text can be split across multiple Word runs. A phrase that looks contiguous on screen may live in several `<w:r>` elements. **Whitespace detection must concatenate the full visible paragraph/cell text first; a space at the end of one run and Chinese text at the start of the next run is still one whitespace defect.**
+
+Do not rebuild an entire paragraph into one run merely to delete a space because that can destroy mixed formatting, hyperlinks, fields, tracked changes, or comments.
 
 For existing DOCX files:
 
 - automatically repair only cases that can be changed without losing run-level semantics;
+- delete only the whitespace character from its original `<w:t>` node;
 - otherwise report the exact paragraph/cell and let the editable source or a document-aware repair routine handle it;
 - verify the rendered result after repair.
