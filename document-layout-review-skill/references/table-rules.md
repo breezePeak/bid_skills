@@ -2,71 +2,185 @@
 
 ## Core rule
 
-A table is complete only when it is **readable in the final rendered Word page**. Preserving a table style ID is not enough. Bad column widths, one-character-per-line wrapping, excessive blank pages, top-aligned cells or stale autofit widths are layout failures.
+A table is complete only when it is **readable and visually coordinated in the final rendered Word page**.
+
+Passing XML validity, keeping a table style ID, or merely staying inside page margins is not enough. A table is still wrong when one column is unnecessarily narrow, another is unnecessarily wide, headers are broken into awkward fragments, long text is trapped in a compact column, repeated grouping text should have been merged, or Word autofit stretches the page because of one long unbreakable token.
 
 ## Template authority
 
 When an active template exists:
 
 1. keep the template's table style, borders, fills, fonts and table-text style;
-2. if the template contains a table with the same header signature, reuse that table's column-width proportions;
-3. otherwise derive widths from content pressure while keeping the template visual style;
-4. structural layout repairs are allowed and required when the template's old table structure is broken or incompatible with actual content.
+2. preserve template-specific physical structure where it is an approved contract;
+3. treat existing template column proportions as a **prior/reference**, not an unconditional final answer;
+4. if actual table content is materially different from the template example, rebalance widths using the current table's header and body content pressure;
+5. structural layout repairs are required when old widths are visually broken or incompatible with actual content.
+
+Do not use “the template already had this width” as a reason to preserve an obviously unbalanced table.
+
+## Required inspection order
+
+For every table:
+
+1. identify the header and semantic purpose of every column;
+2. determine the current section's printable width;
+3. read actual physical grid widths;
+4. measure header pressure and body pressure per column;
+5. compare actual width allocation with content pressure;
+6. detect cramped columns and one-character-per-line risk;
+7. detect unjustified abrupt width differences between adjacent columns;
+8. detect long unbreakable strings that may force autofit/page stretching;
+9. inspect consecutive repeated grouping cells and identify vertical-merge candidates;
+10. render the final DOCX and visually verify the result.
 
 Run:
 
 ```bash
-python3 scripts/table_layout_repair.py <input.docx> --template <template.docx> --output <repaired.docx>
+python3 scripts/table_layout_audit.py <input.docx> \
+  --template-style-json <active-template-style.json> \
+  --json-out <report.json>
 ```
 
-The repair uses fixed DOCX widths and writes the same widths to `tblGrid` and every owning `tcW`.
+The program is a deterministic evidence generator, not an aesthetic oracle. `error` must be fixed. `review` means the Agent must inspect semantics and decide; it must not be ignored or mechanically auto-applied.
 
 ## Width model
 
-Use the **current section's printable width** (paper width minus left/right margins) as the table width ceiling.
+Use the **current section's printable width** as the hard ceiling:
+
+`paper width - left margin - right margin`
 
 For layout-sensitive DOCX:
 
-- set an explicit `dxa` table width;
-- set `w:tblLayout w:type="fixed"`;
-- set every grid column width;
-- set every cell width consistently with its logical column or grid span;
-- center the table on the page;
-- do not rely on Word autofit to rescue bad widths.
+- prefer an explicit `dxa` table width;
+- prefer fixed table layout after widths are resolved;
+- keep `tblGrid` and owning `tcW` values consistent;
+- do not rely on Word autofit to rescue poor widths;
+- do not allow a single long line to expand the table beyond the printable width.
 
-## Column allocation
+## Column allocation must be content-aware
 
 Do not use equal widths by default.
 
-Classify columns by role and pressure:
+Width allocation must consider all of the following:
 
-- compact: sequence, status, yes/no, date, quantity, deviation degree;
-- medium: name, category, object, phase, interface;
-- narrative: requirements, response, measures, notes, basis, impact, explanation.
+- header text length;
+- semantic role of the column;
+- average body content amount;
+- longer-body-content pressure such as p90;
+- maximum body content pressure;
+- actual wrapping behavior after rendering.
 
-Narrative columns receive more width. Compact columns stay narrow but must remain readable. A descriptive column that collapses into one-character-per-line wrapping is a hard failure.
+Typical roles:
 
-### Technical deviation table
+- **compact**: 序号、编号、状态、是否、数量、单位、偏离程度、日期、时间；
+- **medium**: 名称、类别、对象、阶段、模块、工作包、责任单位；
+- **narrative**: 要求、响应内容、措施、说明、备注、依据、风险、影响、处理方法、输入、输出、结论。
 
-The technical deviation table is a six-column semantic table:
+Compact columns should stay compact **but readable**. Medium columns should not be squeezed just because they are not narrative. Narrative columns should receive enough width to avoid dense, awkward wrapping.
 
-1. 序号
-2. 标的名称
-3. 招标技术要求
-4. 投标响应内容
-5. 偏离程度
-6. 备注
+### Header is part of width pressure
 
-The bundled technical-bid template contains the approved six-column structure and width proportions. Reuse those proportions when that template is active. Do not preserve the legacy hidden spacer grid column.
+A short body column can still need more width if the header is long.
+
+Do not create layouts where:
+
+- a four-to-six-character header becomes nearly one character per line;
+- a compact-looking header hides very long body content;
+- a narrow first column forces every body value into tall stacked text;
+- a neighboring low-content column consumes a large share of the page for no reason.
+
+### Visual coordination
+
+The table fails visual balance when:
+
+- one column is conspicuously narrow while a neighboring low-pressure column is very wide;
+- width differences are much larger than differences in header/body content pressure;
+- short columns contain large unused horizontal space while long-text columns are visibly cramped;
+- the table looks like unrelated widths were copied from another document.
+
+The deterministic audit flags severe mismatches, but the Agent must still inspect the rendered page.
+
+## One-character-per-line and cramped-column failures
+
+A descriptive or grouping column that effectively allows only one or two Chinese characters per line is a layout failure when its content is longer than a trivial value.
+
+Do not solve this by globally shrinking the table font.
+
+Preferred repair order:
+
+1. reclaim space from over-wide low-pressure columns;
+2. rebalance the entire table;
+3. allow natural wrapping;
+4. only change font size if the active template explicitly allows it.
+
+## Long unbreakable strings and page stretching
+
+Long URL/path/token/version/hash/identifier strings can cause Word autofit to expand a column or table unexpectedly.
+
+When such strings exist:
+
+- do not let autofit decide the final page width;
+- use controlled/fixed table width;
+- keep the table inside the printable width;
+- where semantically safe, use break opportunities or a display form that does not alter the underlying meaning.
+
+A single line must never be allowed to make the page appear “infinitely wide”.
+
+## Vertical merging of repeated grouping cells
+
+Repeated text is **not automatically** a merge instruction.
+
+First decide what the column means.
+
+Columns that commonly represent a grouping dimension include:
+
+- 标的名称；
+- 项目名称；
+- 工作对象；
+- 类别；
+- 阶段；
+- 模块；
+- 工作包；
+- 责任单位/部门；
+- 成果类型。
+
+When consecutive rows:
+
+1. contain the same non-empty text in such a grouping column;
+2. belong to the same semantic object/group;
+3. differ in subordinate/detail columns;
+
+then the repeated grouping cell should normally be vertically merged.
+
+Do **not** automatically merge:
+
+- 序号/编号；
+- 状态；
+- 是否；
+- 偏离程度；
+- 数量/单位；
+- 日期/时间；
+- result/conclusion fields;
+- any rows that are separate business records even if the displayed text happens to be equal.
+
+After merge:
+
+- preserve every other cell's content;
+- preserve row-to-row correspondence in all other columns;
+- center merged text vertically where the template requires it;
+- verify borders and page breaks;
+- re-render the table.
+
+`table_layout_audit.py` emits these as `review` candidates because semantic ownership cannot be proven solely from XML.
 
 ## Alignment
 
 For technical bids:
 
-- every table cell is vertically centered;
+- every table cell is vertically centered when the template requires it;
 - header cells are horizontally centered;
-- compact body columns are horizontally centered;
-- narrative body columns are left aligned;
+- compact body columns are normally centered;
+- narrative body columns are normally left aligned;
 - table paragraphs use zero first-line indent;
 - table text uses the active template's table-text style.
 
@@ -76,24 +190,39 @@ Use deliberate internal cell margins. Text must not touch borders. Keep margins 
 
 ## Pagination
 
-- repeat the header row on every continued page;
+- repeat the header row on continued pages;
 - allow long rows to split when necessary;
 - do not create giant blank pages merely to keep a long row together;
 - do not rotate ordinary technical-bid tables to landscape;
-- only the technical deviation table section may be landscape.
+- only the template-approved section may use landscape orientation.
 
-## Hard visual failures
+## Hard failures
 
-A table fails when any of the following is visible:
+A table fails when any of the following is true:
 
-- one-character-per-line wrapping caused by a narrow column;
-- long narrative content trapped in a compact-width column;
-- large numbers of nearly empty continuation pages caused by a bad width allocation;
-- text touching borders;
-- inconsistent column widths between repeated pages;
-- body cells visibly top-aligned when vertical centering is required;
-- table width exceeds the section's printable width;
+- total width exceeds printable width;
+- the active template's required physical grid structure is violated;
+- a meaningful column is so narrow that text is effectively one character per line;
+- an autofit table contains a long unbreakable token that can stretch the page;
+- long narrative content is trapped in a compact-width column while low-pressure columns are obviously over-wide;
+- text touches borders;
+- repeated page sections have inconsistent column widths;
+- required vertical centering is missing;
 - font is aggressively shrunk to compensate for bad layout;
-- table is rotated to landscape outside the technical deviation section.
+- table orientation is changed just to hide width problems.
 
-After structural repair, render the DOCX and inspect the table pages. XML checks alone are not sufficient.
+## Review-level findings
+
+These require Agent judgment rather than blind automatic repair:
+
+- moderate column-balance mismatch;
+- abrupt but potentially justified adjacent width differences;
+- repeated grouping cells that may need vertical merging;
+- unusual tables whose semantic role cannot be inferred from the header.
+
+For every review-level finding, the Agent must either:
+
+1. repair it; or
+2. explicitly determine from content that no repair is appropriate.
+
+Then render the latest DOCX and verify the affected table pages.

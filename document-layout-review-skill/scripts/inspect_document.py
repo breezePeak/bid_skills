@@ -75,6 +75,10 @@ def main():
     rr = run_script("docx_audit.py", args.input, "--json-out", p)
     checks.append({"name": "结构与版式", "report": str(p), "run": rr, "result": load_json(p)})
 
+    p = reports / "table-layout.json"
+    rr = run_script("table_layout_audit.py", args.input, "--json-out", p)
+    checks.append({"name": "表格列宽/协调性/合并候选", "report": str(p), "run": rr, "result": load_json(p)})
+
     p = reports / "punctuation.json"
     rr = run_script("contextual_punctuation.py", args.input, "--json-out", p)
     checks.append({"name": "中英文标点", "report": str(p), "run": rr, "result": load_json(p)})
@@ -96,14 +100,22 @@ def main():
     extracted = sorted(str(p) for p in images.glob("*") if p.is_file())
 
     issue_count = 0
+    hard_error_count = 0
+    review_count = 0
     for item in checks:
         data = item.get("result") or {}
         if isinstance(data.get("issues"), list):
             issue_count += len(data["issues"])
+            for issue in data["issues"]:
+                if issue.get("severity") == "error":
+                    hard_error_count += 1
+                elif issue.get("severity") == "review":
+                    review_count += 1
         elif isinstance(data.get("issue_count"), int):
             issue_count += data["issue_count"]
         elif data.get("status") == "failed":
             issue_count += 1
+            hard_error_count += 1
 
     result = {
         "status": "inspected",
@@ -111,14 +123,26 @@ def main():
         "template": str(template) if template else None,
         "template_style_json": str(style_json) if style_json else None,
         "issue_count": issue_count,
+        "hard_error_count": hard_error_count,
+        "semantic_review_count": review_count,
         "checks": checks,
         "extracted_images": extracted,
         "visual_review_required": True,
-        "next": "Agent 根据 inspection.json 和页面/图片视觉检查形成完整问题清单后，再进入修复。",
+        "next": (
+            "Agent 根据 inspection.json、table-layout.json 和页面/图片视觉检查形成完整问题清单后再进入修复。"
+            "表格 review 级结果必须结合语义逐项处理，不能当作自动合并命令。"
+        ),
     }
     out = args.work_dir / "inspection.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"status": result["status"], "inspection": str(out), "issue_count": issue_count, "image_count": len(extracted)}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "status": result["status"],
+        "inspection": str(out),
+        "issue_count": issue_count,
+        "hard_error_count": hard_error_count,
+        "semantic_review_count": review_count,
+        "image_count": len(extracted),
+    }, ensure_ascii=False, indent=2))
     return 0
 
 if __name__ == "__main__":
