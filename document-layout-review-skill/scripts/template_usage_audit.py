@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Audit actual body formatting at run granularity.
 
-Font and size are structural formatting, not semantic emphasis. A single visible
-body run whose explicit font/size conflicts with the body baseline is a release-
-blocking error. Bold/italic keep the older bulk threshold because short local
-emphasis may be intentional.
+Body font, size, and direct bold/italic are structural formatting. A single
+visible body run whose direct formatting conflicts with the body baseline is a
+release-blocking error. Intentional emphasis must be represented by an allowed
+character style (or be explicitly requested by the user), not by stray direct
+formatting in ordinary body text.
 """
 from __future__ import annotations
 
@@ -105,11 +106,7 @@ def style_run_overrides(profile: dict, sid: str | None) -> dict:
 
 
 def comparable_font_conflicts(actual: dict[str, str], expected: dict[str, str]) -> dict:
-    """Return only conflicts we can determine without resolving theme fonts.
-
-    If one side uses a concrete font and the other only a theme token, do not guess;
-    template_style_enforce already removes direct rFonts from known body paragraphs.
-    """
+    """Return only conflicts we can determine without resolving theme fonts."""
     bad = {}
     for key in FONT_KEYS:
         if key in actual and key in expected and actual[key] != expected[key]:
@@ -150,6 +147,27 @@ def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expe
     return {"style_id": rsid, "conflicts": bad} if bad else {}
 
 
+def direct_emphasis_issues(
+    rpr: ET.Element | None,
+    *,
+    expected_bold: bool,
+    expected_italic: bool,
+) -> list[tuple[str, str]]:
+    """Return direct bold/italic conflicts for ordinary body text.
+
+    Character-style emphasis is intentionally not rejected here. This function
+    only checks direct w:b/w:bCs/w:i/w:iCs properties.
+    """
+    if rpr is None:
+        return []
+    out: list[tuple[str, str]] = []
+    if not expected_bold and (boolprop(rpr, "b") or boolprop(rpr, "bCs")):
+        out.append(("body-run-bold-direct-format", "普通正文 run 存在直接加粗，覆盖了正文基准字重。"))
+    if not expected_italic and (boolprop(rpr, "i") or boolprop(rpr, "iCs")):
+        out.append(("body-run-italic-direct-format", "普通正文 run 存在直接斜体，覆盖了正文基准字形。"))
+    return out
+
+
 def audit(template: Path, target: Path) -> dict:
     template_profile = extract_profile(template)
     target_profile = extract_profile(target)
@@ -169,6 +187,8 @@ def audit(template: Path, target: Path) -> dict:
     expected_fonts = expected.get("fonts") or {}
     expected_size = expected.get("size_half_points")
     expected_size_cs = expected.get("size_cs_half_points") or expected_size
+    expected_bold = expected.get("bold") is True
+    expected_italic = expected.get("italic") is True
 
     with zipfile.ZipFile(target) as z:
         root = ET.fromstring(z.read("word/document.xml"))
@@ -195,20 +215,30 @@ def audit(template: Path, target: Path) -> dict:
         if not text:
             continue
 
-        total = 0
-        bold = 0
-        italic = 0
+        # Paragraph-level run properties can make every run look bold/italic even
+        # when individual runs have no rPr. Treat those as direct-format pollution.
+        pmark_rpr = p.find("w:pPr/w:rPr", NS)
+        for code, message in direct_emphasis_issues(
+            pmark_rpr,
+            expected_bold=expected_bold,
+            expected_italic=expected_italic,
+        ):
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": code.replace("body-run-", "body-paragraph-"),
+                    "paragraph": idx,
+                    "run": 0,
+                    "text": text[:120],
+                    "message": message.replace("run", "段落默认文字"),
+                }
+            )
+
         for run_idx, r in enumerate(p.findall(".//w:r", NS), 1):
             rt = "".join(t.text or "" for t in r.findall(".//w:t", NS))
-            n = len(rt)
-            if not n:
+            if not rt:
                 continue
-            total += n
             rpr = r.find("w:rPr", NS)
-            if boolprop(rpr, "b"):
-                bold += n
-            if boolprop(rpr, "i"):
-                italic += n
             if rpr is None:
                 continue
 
@@ -263,28 +293,21 @@ def audit(template: Path, target: Path) -> dict:
                     }
                 )
 
-        # 只有加粗/斜体继续使用覆盖率阈值；字体/字号已经逐 run 零容忍检查。
-        if total >= 12:
-            if bold / total >= 0.60:
+            # No coverage threshold: one stray direct-bold/direct-italic run is an
+            # error whenever the body baseline itself is not bold/italic.
+            for code, message in direct_emphasis_issues(
+                rpr,
+                expected_bold=expected_bold,
+                expected_italic=expected_italic,
+            ):
                 issues.append(
                     {
                         "severity": "error",
-                        "code": "body-bulk-bold-direct-format",
+                        "code": code,
                         "paragraph": idx,
-                        "coverage": round(bold / total, 3),
-                        "text": text[:160],
-                        "message": "普通正文大面积使用直接加粗，覆盖了模板正文样式。",
-                    }
-                )
-            if italic / total >= 0.60:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "code": "body-bulk-italic-direct-format",
-                        "paragraph": idx,
-                        "coverage": round(italic / total, 3),
-                        "text": text[:160],
-                        "message": "普通正文大面积使用直接斜体，覆盖了模板正文样式。",
+                        "run": run_idx,
+                        "text": rt[:120],
+                        "message": message,
                     }
                 )
 

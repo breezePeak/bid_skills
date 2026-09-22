@@ -28,6 +28,17 @@ FULLWIDTH_ASCII_QUOTES = {"＂", "＇"}
 SPACE_CHARS = " \u3000\u00a0"
 SP = f"[{re.escape(SPACE_CHARS)}]"
 
+DATE_TIME_UNITS = ("年", "月", "日", "号", "时", "分", "秒")
+COUNT_UNITS = (
+    "平方公里", "平方米", "立方米", "公里", "厘米", "毫米", "万元", "亿元",
+    "套", "份", "台", "个", "项", "次", "人", "家", "组", "类", "页", "章",
+    "节", "条", "款", "批", "处", "点", "座", "册", "张", "幅", "米", "元",
+)
+NUMBER_SUFFIXES = tuple(sorted(set(DATE_TIME_UNITS + COUNT_UNITS + ("%", "％", "℃")), key=len, reverse=True))
+NUMBER_SUFFIX_RE = "(?:" + "|".join(re.escape(x) for x in NUMBER_SUFFIXES) + ")"
+COUNT_UNIT_RE = "(?:" + "|".join(re.escape(x) for x in sorted(COUNT_UNITS, key=len, reverse=True)) + ")"
+NUMBER_RE = r"\d+(?:[.,]\d+)?"
+
 
 @dataclass
 class Issue:
@@ -181,6 +192,43 @@ def audit_paragraph(text: str, part: str, idx: int) -> list[Issue]:
                     excerpt(text),
                 )
             )
+
+        # Chinese date/time and quantity formatting must not contain spaces around
+        # their numeric unit boundaries.
+        if re.search(fr"(?<=\d){SP}+(?={NUMBER_SUFFIX_RE})", text):
+            out.append(
+                Issue(
+                    "error",
+                    "space-between-number-and-chinese-unit",
+                    part,
+                    idx,
+                    "数字与中文日期/时间/数量单位之间存在无用空格，例如“2026 年”“1 套”。",
+                    excerpt(text),
+                )
+            )
+        if re.search(fr"(?<=[年月日号时分秒]){SP}+(?=\d)", text):
+            out.append(
+                Issue(
+                    "error",
+                    "space-inside-chinese-date-time",
+                    part,
+                    idx,
+                    "中文日期/时间各数字段之间存在无用空格，例如“2026年 10月”。",
+                    excerpt(text),
+                )
+            )
+        if re.search(fr"(?<=[{HAN}]){SP}+(?={NUMBER_RE}{SP}*{COUNT_UNIT_RE})", text):
+            out.append(
+                Issue(
+                    "error",
+                    "space-before-chinese-quantity",
+                    part,
+                    idx,
+                    "中文名词与其数量之间存在无用空格，例如“软件 1套”“报告 2份”。",
+                    excerpt(text),
+                )
+            )
+
         if re.search(fr"^{SP}+|{SP}+$", text):
             out.append(
                 Issue(

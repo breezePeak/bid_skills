@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Repair body-format drift without requiring paragraph-wide coverage.
+"""Repair body-format drift at run granularity.
 
-Any visible body run whose explicit font/size conflicts with the template baseline
-is repaired locally. Bold/italic remain conservative and are cleared only when they
-cover most of a body paragraph.
+Any visible ordinary-body run whose explicit font/size conflicts with the template
+baseline is repaired locally. Direct bold/italic are also removed whenever the body
+baseline itself is not bold/italic. Intentional emphasis should be expressed through
+an allowed character style instead of stray direct formatting.
 """
 from __future__ import annotations
 
@@ -132,6 +133,30 @@ def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expe
     return False
 
 
+def remove_direct_emphasis(
+    rpr: ET.Element | None,
+    *,
+    expected_bold: bool,
+    expected_italic: bool,
+) -> list[str]:
+    if rpr is None:
+        return []
+    removed: list[str] = []
+    if not expected_bold:
+        for tag in ("b", "bCs"):
+            node = rpr.find(f"w:{tag}", NS)
+            if node is not None and enabled(rpr, tag):
+                rpr.remove(node)
+                removed.append(tag)
+    if not expected_italic:
+        for tag in ("i", "iCs"):
+            node = rpr.find(f"w:{tag}", NS)
+            if node is not None and enabled(rpr, tag):
+                rpr.remove(node)
+                removed.append(tag)
+    return removed
+
+
 def repair(template: Path, src: Path, out: Path) -> dict:
     template_profile = extract_profile(template)
     target_profile = extract_profile(src)
@@ -151,6 +176,8 @@ def repair(template: Path, src: Path, out: Path) -> dict:
     expected_fonts = expected.get("fonts") or {}
     expected_size = expected.get("size_half_points")
     expected_size_cs = expected.get("size_cs_half_points") or expected_size
+    expected_bold = expected.get("bold") is True
+    expected_italic = expected.get("italic") is True
 
     with zipfile.ZipFile(src) as z:
         root = ET.fromstring(z.read("word/document.xml"))
@@ -177,27 +204,33 @@ def repair(template: Path, src: Path, out: Path) -> dict:
         if not raw:
             continue
 
-        runs = []
-        total = 0
-        bold = 0
-        italic = 0
+        # Paragraph-level run properties can impose direct bold/italic on all runs.
+        pmark_rpr = p.find("w:pPr/w:rPr", NS)
+        pmark_removed = remove_direct_emphasis(
+            pmark_rpr,
+            expected_bold=expected_bold,
+            expected_italic=expected_italic,
+        )
+        if pmark_removed:
+            changes.append(
+                {
+                    "paragraph": idx,
+                    "run": 0,
+                    "removed": pmark_removed,
+                    "text": raw[:120],
+                    "scope": "paragraph-default-run-properties",
+                }
+            )
+        if pmark_rpr is not None and len(pmark_rpr) == 0:
+            ppr = p.find("w:pPr", NS)
+            if ppr is not None:
+                ppr.remove(pmark_rpr)
+
         for run_idx, r in enumerate(p.findall(".//w:r", NS), 1):
             rt = "".join(t.text or "" for t in r.findall(".//w:t", NS))
-            n = len(rt)
-            if not n:
+            if not rt:
                 continue
-            total += n
             rpr = r.find("w:rPr", NS)
-            runs.append((run_idx, r, rpr, rt))
-            if enabled(rpr, "b"):
-                bold += n
-            if enabled(rpr, "i"):
-                italic += n
-
-        clear_bold = total >= 12 and bold / total >= 0.60
-        clear_italic = total >= 12 and italic / total >= 0.60
-
-        for run_idx, r, rpr, rt in runs:
             if rpr is None:
                 continue
             removed: list[str] = []
@@ -216,25 +249,24 @@ def repair(template: Path, src: Path, out: Path) -> dict:
                     rpr.remove(node)
                     removed.append(tag)
 
-            # 字符样式自身如果改变正文的字体/字号，则只移除该 run 的字符样式。
+            # A character style that changes font/size away from the body baseline
+            # is formatting pollution. Character styles that only provide semantic
+            # emphasis (for example bold) are preserved.
             if character_style_conflicts(target_profile, rpr, expected):
                 node = rpr.find("w:rStyle", NS)
                 if node is not None:
                     rpr.remove(node)
                     removed.append("rStyle")
 
-            if clear_bold:
-                for tag in ("b", "bCs"):
-                    node = rpr.find(f"w:{tag}", NS)
-                    if node is not None:
-                        rpr.remove(node)
-                        removed.append(tag)
-            if clear_italic:
-                for tag in ("i", "iCs"):
-                    node = rpr.find(f"w:{tag}", NS)
-                    if node is not None:
-                        rpr.remove(node)
-                        removed.append(tag)
+            # Direct bold/italic no longer use a paragraph coverage threshold.
+            # One stray run is enough to produce the visible defect shown by users.
+            removed.extend(
+                remove_direct_emphasis(
+                    rpr,
+                    expected_bold=expected_bold,
+                    expected_italic=expected_italic,
+                )
+            )
 
             if removed:
                 changes.append(
@@ -243,6 +275,7 @@ def repair(template: Path, src: Path, out: Path) -> dict:
                         "run": run_idx,
                         "removed": removed,
                         "text": rt[:120],
+                        "scope": "run",
                     }
                 )
             if len(rpr) == 0:
