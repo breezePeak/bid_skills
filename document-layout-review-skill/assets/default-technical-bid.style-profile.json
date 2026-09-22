@@ -1,0 +1,1291 @@
+{
+  "profile_version": 2,
+  "source_file": "default-technical-bid.confirmed.docx",
+  "source_sha256": "sha256:789faad30936d92e9c694148ac08163ac4ee2389ab0bc052419e7b223620c515",
+  "package_hashes": {
+    "word/styles.xml": "sha256:eb67b5d842f38236716c27275790f03e104066a1ce3c1ff2fbee89bc41f83df4",
+    "word/numbering.xml": "sha256:40bcd8a95226cd1e43abb7291bcc86faa31500f9eaaeefee8c2ff27e5dda52ee",
+    "word/theme/theme1.xml": "sha256:b93b94aa85f3466caf044264ab23200d39b9b4ee172ef6ae1343b5696cf331ad",
+    "word/settings.xml": "sha256:b6fe6c268c8ccf8f2843cc499693785eceb7a017682cbb3a56ee8a2cca8ee075",
+    "word/fontTable.xml": "sha256:1027b377d37179a1c1c8a5376f57606f9c369075c1e62292b36ae4afd7ba4270"
+  },
+  "doc_defaults": {
+    "run": {
+      "fonts": {
+        "asciiTheme": "minorHAnsi",
+        "hAnsiTheme": "minorHAnsi",
+        "eastAsiaTheme": "minorEastAsia"
+      }
+    },
+    "paragraph": {}
+  },
+  "styles": {
+    "1": {
+      "id": "1",
+      "type": "paragraph",
+      "name": "Normal",
+      "based_on": null,
+      "next": null,
+      "link": null,
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "indent": {
+          "firstLineChars": "200"
+        },
+        "widow_control": false
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "22"
+      },
+      "table": {},
+      "qformat": true,
+      "default": true,
+      "signature": "sha256:f3ca263efba2c96f880a0a5c203df21614bfcd7f72d000d5058bdbf35e728294"
+    },
+    "2": {
+      "id": "2",
+      "type": "paragraph",
+      "name": "heading 1",
+      "based_on": null,
+      "next": "1",
+      "link": "19",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 0
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "44",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:16700e86b9610b4be693c3f73fcfa0063921ffee3445d339d07534d575ac73a5"
+    },
+    "3": {
+      "id": "3",
+      "type": "paragraph",
+      "name": "heading 2",
+      "based_on": null,
+      "next": "1",
+      "link": "20",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 1
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "32",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:9c26b690a2b154728dc64d0ff4080e3ed4ce73d2ff0a295250beb43b6bc7de8c"
+    },
+    "4": {
+      "id": "4",
+      "type": "paragraph",
+      "name": "heading 3",
+      "based_on": null,
+      "next": "1",
+      "link": "21",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 2
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "32",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:c843c72a4bb16a9aa3f63fa0891d15a5a7928f7176007255f2b39008e77e5ea4"
+    },
+    "5": {
+      "id": "5",
+      "type": "paragraph",
+      "name": "heading 4",
+      "based_on": null,
+      "next": "1",
+      "link": "22",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 3
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "28",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:2b71c12f03d515595001367a2292a7e2174b5e787a53686ba01cd8492423102b"
+    },
+    "6": {
+      "id": "6",
+      "type": "paragraph",
+      "name": "heading 5",
+      "based_on": "1",
+      "next": "1",
+      "link": "23",
+      "paragraph": {
+        "indent": {
+          "firstLine": "0",
+          "firstLineChars": "0"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 4
+      },
+      "run": {
+        "size_half_points": "32",
+        "size_cs_half_points": "28",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:2e63666fb4c053844fb353ff5cf074d1d3f057b90f3aa17a0a58c5018a8e36ae"
+    },
+    "7": {
+      "id": "7",
+      "type": "paragraph",
+      "name": "heading 6",
+      "based_on": null,
+      "next": "1",
+      "link": "24",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 5
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:94ed856a7e6430e715a0e276ea0c44f618ea61fdb2a912f3297d5dab8b0dfc52"
+    },
+    "8": {
+      "id": "8",
+      "type": "paragraph",
+      "name": "heading 7",
+      "based_on": null,
+      "next": "1",
+      "link": "25",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 6
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:dad64e5fd8edc08d6c3e543aa78e94a9078f0634ecd9156a4962ebb71d0e952f"
+    },
+    "9": {
+      "id": "9",
+      "type": "paragraph",
+      "name": "heading 8",
+      "based_on": null,
+      "next": "1",
+      "link": "26",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 7
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:ae9ccdf7fdae41f1cff21578ad8e389cf9159afaaff9f4bb5a0836f1fbf4d309"
+    },
+    "10": {
+      "id": "10",
+      "type": "paragraph",
+      "name": "heading 9",
+      "based_on": null,
+      "next": "1",
+      "link": "27",
+      "paragraph": {
+        "alignment": "both",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        },
+        "keep_next": true,
+        "keep_lines": true,
+        "outline_level": 8
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "21",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:d756ade6ba7eb3ef92912ab474a52ccaacca6a5fff13b40a5c1ccc38c81f9476"
+    },
+    "17": {
+      "id": "17",
+      "type": "character",
+      "name": "Default Paragraph Font",
+      "based_on": null,
+      "next": null,
+      "link": null,
+      "paragraph": {},
+      "run": {},
+      "table": {},
+      "qformat": true,
+      "default": true,
+      "signature": "sha256:4e67f98f186f5a6e2dc487075fa688c8da6d85da3e23ae580aa61baa1a3b5695"
+    },
+    "15": {
+      "id": "15",
+      "type": "table",
+      "name": "Normal Table",
+      "based_on": null,
+      "next": null,
+      "link": null,
+      "paragraph": {},
+      "run": {},
+      "table": {
+        "cell_margins": {
+          "top": {
+            "value": "0",
+            "type": "dxa"
+          },
+          "left": {
+            "value": "108",
+            "type": "dxa"
+          },
+          "bottom": {
+            "value": "0",
+            "type": "dxa"
+          },
+          "right": {
+            "value": "108",
+            "type": "dxa"
+          }
+        }
+      },
+      "qformat": true,
+      "default": true,
+      "signature": "sha256:ae1847a1f2c9847e957135a54db63c77e27330adbbc502692da99149012f5a88"
+    },
+    "11": {
+      "id": "11",
+      "type": "paragraph",
+      "name": "caption",
+      "based_on": "1",
+      "next": "1",
+      "link": "37",
+      "paragraph": {
+        "alignment": "center",
+        "indent": {
+          "firstLine": "0",
+          "firstLineChars": "0"
+        }
+      },
+      "run": {
+        "fonts": {
+          "eastAsia": "宋体",
+          "cs": "Times New Roman"
+        },
+        "size_cs_half_points": "21"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:4c82baf700f3601120c6248dbd33d804adef83a003c27bceaf001bd6e50fe6a9"
+    },
+    "12": {
+      "id": "12",
+      "type": "paragraph",
+      "name": "annotation text",
+      "based_on": "1",
+      "next": null,
+      "link": "36",
+      "paragraph": {
+        "alignment": "left",
+        "indent": {
+          "firstLine": "480"
+        }
+      },
+      "run": {},
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:c2f2fbc80fb643e61b2739ad0db2b4c821e11be8cd44ba861564e60ce9e50b1c"
+    },
+    "13": {
+      "id": "13",
+      "type": "paragraph",
+      "name": "footer",
+      "based_on": "1",
+      "next": null,
+      "link": "29",
+      "paragraph": {
+        "alignment": "left"
+      },
+      "run": {
+        "size_half_points": "18",
+        "size_cs_half_points": "18"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:c949d31428a42c39c59fdd5696fe702d1984f64c11d5e8cf0e927a544404065e"
+    },
+    "14": {
+      "id": "14",
+      "type": "paragraph",
+      "name": "header",
+      "based_on": "1",
+      "next": null,
+      "link": "28",
+      "paragraph": {
+        "alignment": "center"
+      },
+      "run": {
+        "size_half_points": "18",
+        "size_cs_half_points": "18"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:bcc4a3206a1996ab9c2c32b33c4794a36e9bf3e00119c76f9d058e2c6ee70ccb"
+    },
+    "16": {
+      "id": "16",
+      "type": "table",
+      "name": "Table Grid",
+      "based_on": "15",
+      "next": null,
+      "link": null,
+      "paragraph": {},
+      "run": {},
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:37620628579c446d5ef0d56a3624cbea5dbc86b4f379f8c87e683d29b44bba59"
+    },
+    "18": {
+      "id": "18",
+      "type": "character",
+      "name": "annotation reference",
+      "based_on": "17",
+      "next": null,
+      "link": null,
+      "paragraph": {},
+      "run": {
+        "size_half_points": "21",
+        "size_cs_half_points": "21"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:882900f0e716a5c07b7c0cf33eb44aa76d51051a5f95ff542b713a2a2cad758b"
+    },
+    "19": {
+      "id": "19",
+      "type": "character",
+      "name": "标题 1 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "2",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "44",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:91c3be829d302048aa9329d7ba43b1473b1383cd36744ea79341b8bf07735916"
+    },
+    "20": {
+      "id": "20",
+      "type": "character",
+      "name": "标题 2 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "3",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "32",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:98e27fc3d6acb75f34017fa8a4a1df7448bbac6e4e55664d12ec1ce89b9264a7"
+    },
+    "21": {
+      "id": "21",
+      "type": "character",
+      "name": "标题 3 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "4",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "32",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:1a1e6c66f352f2580e9c7fe2c85c358f87b03a5ff430e1dda3ce4de9bde0d202"
+    },
+    "22": {
+      "id": "22",
+      "type": "character",
+      "name": "标题 4 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "5",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "28",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:e264be4685da7a2bdf8d072881687b84b8de1d4690849594988b1fbc2b5abe1b"
+    },
+    "23": {
+      "id": "23",
+      "type": "character",
+      "name": "标题 5 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "6",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "28",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:ec98bf42b601a5cad688e4ab67880a391f5a4cc6601cd29f8ed5c4f9d792eca7"
+    },
+    "24": {
+      "id": "24",
+      "type": "character",
+      "name": "标题 6 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "7",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:2c342d3a0e4ef8bffe3dfca09f41d766a58f81dcbc6e4f7b4f747b0153700fd2"
+    },
+    "25": {
+      "id": "25",
+      "type": "character",
+      "name": "标题 7 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "8",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:1fbcbf82546adce9029d78710b1aa7d2d48a22b9cb96f0ab3557220b356192e2"
+    },
+    "26": {
+      "id": "26",
+      "type": "character",
+      "name": "标题 8 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "9",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "24",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:7ce8404cd79239f6b009170e50dbbbe739ece15016dad71e26943de412e36f3a"
+    },
+    "27": {
+      "id": "27",
+      "type": "character",
+      "name": "标题 9 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "10",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "majorEastAsia"
+        },
+        "size_half_points": "32",
+        "size_cs_half_points": "21",
+        "bold": true
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:cd024c2ee06e1c99b9c56a21fe63586915e299987447b40587396703f8978e69"
+    },
+    "28": {
+      "id": "28",
+      "type": "character",
+      "name": "页眉 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "14",
+      "paragraph": {},
+      "run": {
+        "size_half_points": "18",
+        "size_cs_half_points": "18"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:efffa014d2ba8711829e158b4e06805b4bd724170e144fcff5d057f1f8688af5"
+    },
+    "29": {
+      "id": "29",
+      "type": "character",
+      "name": "页脚 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "13",
+      "paragraph": {},
+      "run": {
+        "size_half_points": "18",
+        "size_cs_half_points": "18"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:efb6457818dfde1d38c7d5b0ee8d59e743dcc43b692a6f9abcddbbda36728802"
+    },
+    "30": {
+      "id": "30",
+      "type": "paragraph",
+      "name": "00题注",
+      "based_on": null,
+      "next": "1",
+      "link": "32",
+      "paragraph": {
+        "alignment": "center",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        }
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "22"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:223952184186b497336932b2357dfed73d6b1d5ce46df969d9f6f340c7cf2eb6"
+    },
+    "31": {
+      "id": "31",
+      "type": "paragraph",
+      "name": "00图片",
+      "based_on": null,
+      "next": "1",
+      "link": "34",
+      "paragraph": {
+        "alignment": "center",
+        "spacing": {
+          "line": "360",
+          "lineRule": "auto"
+        }
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "22"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:010b7ce9895cc477967636849ba191c34bfaaa3d1d6a4d487e0ce0769d2a0eca"
+    },
+    "32": {
+      "id": "32",
+      "type": "character",
+      "name": "00题注 Char",
+      "based_on": "17",
+      "next": null,
+      "link": "30",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "24"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:457b12f47f7ee850ae5981fe0fb87886c1db77f4f101b2601107553b69ba0244"
+    },
+    "33": {
+      "id": "33",
+      "type": "paragraph",
+      "name": "00表格文字",
+      "based_on": null,
+      "next": "1",
+      "link": "35",
+      "paragraph": {
+        "alignment": "center",
+        "spacing": {
+          "line": "440",
+          "lineRule": "exact"
+        }
+      },
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsiaTheme": "minorEastAsia"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "22"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:708e4c34f4ad61cdebebac146bd1010cb289bd01af17756cfb5dbd75f7379e77"
+    },
+    "34": {
+      "id": "34",
+      "type": "character",
+      "name": "00图片 Char",
+      "based_on": "17",
+      "next": null,
+      "link": "31",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "24"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:c71c248dc005f64defb8a5ccf5bde23a54a857365c7b3315e5b7e5fc644c86c0"
+    },
+    "35": {
+      "id": "35",
+      "type": "character",
+      "name": "00表格文字 Char",
+      "based_on": "17",
+      "next": null,
+      "link": "33",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "24"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:f5d73cb091f2480db07b9023ea004bb71fab706022a751d1acad288a9cf86e3b"
+    },
+    "36": {
+      "id": "36",
+      "type": "character",
+      "name": "批注文字 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "12",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman"
+        },
+        "size_half_points": "24"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:37f0c16ed100573d6b7c564c44edd606c057b64b75d8bc4319c44dfe16998d4d"
+    },
+    "37": {
+      "id": "37",
+      "type": "character",
+      "name": "题注 字符",
+      "based_on": null,
+      "next": null,
+      "link": "11",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "宋体",
+          "cs": "Times New Roman"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "21"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:7d7a92e5071f34c1213657b0d8981c13223468cebaa91f9791c4224c9fad5f66"
+    },
+    "38": {
+      "id": "38",
+      "type": "paragraph",
+      "name": "00-表格文字",
+      "based_on": "1",
+      "next": null,
+      "link": "39",
+      "paragraph": {
+        "alignment": "left",
+        "indent": {
+          "firstLine": "0",
+          "firstLineChars": "0"
+        },
+        "widow_control": true
+      },
+      "run": {
+        "fonts": {
+          "eastAsia": "宋体"
+        }
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:5cfc09c019a136e191ff03c2e02867b192c678cfe707be1353208c0d6279fb61"
+    },
+    "39": {
+      "id": "39",
+      "type": "character",
+      "name": "00-表格文字 字符",
+      "based_on": "17",
+      "next": null,
+      "link": "38",
+      "paragraph": {},
+      "run": {
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "宋体"
+        },
+        "size_half_points": "24",
+        "size_cs_half_points": "22"
+      },
+      "table": {},
+      "qformat": true,
+      "default": false,
+      "signature": "sha256:97b1522303c6198d2793a718535b097364b0922722031672817264a8848aecff"
+    }
+  },
+  "style_name_to_id": {
+    "Normal": "1",
+    "heading 1": "2",
+    "heading 2": "3",
+    "heading 3": "4",
+    "heading 4": "5",
+    "heading 5": "6",
+    "heading 6": "7",
+    "heading 7": "8",
+    "heading 8": "9",
+    "heading 9": "10",
+    "Default Paragraph Font": "17",
+    "Normal Table": "15",
+    "caption": "11",
+    "annotation text": "12",
+    "footer": "13",
+    "header": "14",
+    "Table Grid": "16",
+    "annotation reference": "18",
+    "标题 1 字符": "19",
+    "标题 2 字符": "20",
+    "标题 3 字符": "21",
+    "标题 4 字符": "22",
+    "标题 5 字符": "23",
+    "标题 6 字符": "24",
+    "标题 7 字符": "25",
+    "标题 8 字符": "26",
+    "标题 9 字符": "27",
+    "页眉 字符": "28",
+    "页脚 字符": "29",
+    "00题注": "30",
+    "00图片": "31",
+    "00题注 Char": "32",
+    "00表格文字": "33",
+    "00图片 Char": "34",
+    "00表格文字 Char": "35",
+    "批注文字 字符": "36",
+    "题注 字符": "37",
+    "00-表格文字": "38",
+    "00-表格文字 字符": "39"
+  },
+  "semantic_roles": {
+    "heading1": {
+      "style_id": "2",
+      "source": "outline-level"
+    },
+    "heading2": {
+      "style_id": "3",
+      "source": "outline-level"
+    },
+    "heading3": {
+      "style_id": "4",
+      "source": "outline-level"
+    },
+    "heading4": {
+      "style_id": "5",
+      "source": "outline-level"
+    },
+    "heading5": {
+      "style_id": "6",
+      "source": "outline-level"
+    },
+    "heading6": {
+      "style_id": "7",
+      "source": "outline-level"
+    },
+    "heading7": {
+      "style_id": "8",
+      "source": "outline-level"
+    },
+    "heading8": {
+      "style_id": "9",
+      "source": "outline-level"
+    },
+    "heading9": {
+      "style_id": "10",
+      "source": "outline-level"
+    },
+    "caption": {
+      "style_ids": [
+        "11",
+        "30"
+      ],
+      "source": "style-name"
+    },
+    "table": {
+      "style_id": "16",
+      "source": "template-usage"
+    },
+    "table_text": {
+      "source": "template-usage",
+      "style_id": "38"
+    },
+    "body": {
+      "source": "default-paragraph-style",
+      "style_id": "1"
+    },
+    "cover_title": {
+      "source": "first-visible-paragraph",
+      "direct_format": {
+        "paragraph": {
+          "alignment": "center",
+          "spacing": {
+            "before": "1400",
+            "after": "520",
+            "line": "360",
+            "lineRule": "auto"
+          },
+          "keep_next": true
+        },
+        "run": {
+          "bold": true,
+          "fonts": {
+            "ascii": "Times New Roman",
+            "eastAsia": "宋体",
+            "hAnsi": "Times New Roman"
+          },
+          "size_cs_half_points": "64",
+          "size_half_points": "64"
+        }
+      }
+    }
+  },
+  "usage": {
+    "paragraph_styles": {
+      "(direct)": 14,
+      "2": 1
+    },
+    "table_paragraph_styles": {
+      "38": 10
+    },
+    "table_styles": {
+      "16": 1
+    }
+  },
+  "section_geometries": [
+    {
+      "page_size": {
+        "w": "11906",
+        "h": "16838"
+      },
+      "margins": {
+        "top": "1440",
+        "right": "1800",
+        "bottom": "1440",
+        "left": "1800",
+        "header": "851",
+        "footer": "992",
+        "gutter": "0"
+      },
+      "columns": {
+        "num": "1",
+        "space": "425"
+      },
+      "doc_grid": {
+        "type": "lines",
+        "linePitch": "312",
+        "charSpace": "0"
+      }
+    },
+    {
+      "page_size": {
+        "w": "16838",
+        "h": "11906",
+        "orient": "landscape"
+      },
+      "margins": {
+        "top": "1800",
+        "right": "1440",
+        "bottom": "1800",
+        "left": "1440",
+        "header": "851",
+        "footer": "992",
+        "gutter": "0"
+      },
+      "columns": {
+        "num": "1",
+        "space": "425"
+      },
+      "doc_grid": {
+        "type": "lines",
+        "linePitch": "326",
+        "charSpace": "0"
+      }
+    }
+  ],
+  "sections": [
+    {
+      "index": 1,
+      "orientation": "portrait",
+      "geometry": {
+        "page_size": {
+          "w": "11906",
+          "h": "16838"
+        },
+        "margins": {
+          "top": "1440",
+          "right": "1800",
+          "bottom": "1440",
+          "left": "1800",
+          "header": "851",
+          "footer": "992",
+          "gutter": "0"
+        },
+        "columns": {
+          "num": "1",
+          "space": "425"
+        },
+        "doc_grid": {
+          "type": "lines",
+          "linePitch": "312",
+          "charSpace": "0"
+        }
+      },
+      "contains_technical_deviation": false,
+      "text_sample": "技术标 项目名称 项目编号： 投标人： 日期： 目录 目录将在最终导出时由程序根据章节自动生成"
+    },
+    {
+      "index": 2,
+      "orientation": "landscape",
+      "geometry": {
+        "page_size": {
+          "w": "16838",
+          "h": "11906",
+          "orient": "landscape"
+        },
+        "margins": {
+          "top": "1800",
+          "right": "1440",
+          "bottom": "1800",
+          "left": "1440",
+          "header": "851",
+          "footer": "992",
+          "gutter": "0"
+        },
+        "columns": {
+          "num": "1",
+          "space": "425"
+        },
+        "doc_grid": {
+          "type": "lines",
+          "linePitch": "326",
+          "charSpace": "0"
+        }
+      },
+      "contains_technical_deviation": true,
+      "text_sample": "技术偏离表 技术偏离表 序号​标的名称​招标技术要求​投标响应内容​偏离程度​备注​1满足、响应2满足、响应 说明： 1. “招标技术要求”栏应详细列明招标文件中的技术要求。 2. “投标响应内容”栏填写投标人对招标文件提出的技术要求作出的明确响应，并列明具体响应数值或内容，只注明符合、 满足等无具体内容表述的，将视为未实质性满足招标文件要求。 3. “偏离程度”栏填写满足、响应或正偏离、负偏离。 4. “备注”栏可填写偏离情况的具体说明。 5. 本表填写内容与分项报价表不一"
+    },
+    {
+      "index": 3,
+      "orientation": "portrait",
+      "geometry": {
+        "page_size": {
+          "w": "11906",
+          "h": "16838"
+        },
+        "margins": {
+          "top": "1440",
+          "right": "1800",
+          "bottom": "1440",
+          "left": "1800",
+          "header": "851",
+          "footer": "992",
+          "gutter": "0"
+        },
+        "columns": {
+          "num": "1",
+          "space": "425"
+        },
+        "doc_grid": {
+          "type": "lines",
+          "linePitch": "312",
+          "charSpace": "0"
+        }
+      },
+      "contains_technical_deviation": false,
+      "text_sample": ""
+    }
+  ],
+  "table_contract": {
+    "cell_count": 20,
+    "vertical_alignment_counts": {
+      "center": 20
+    },
+    "dominant_vertical_alignment": "center",
+    "all_cells_vertically_centered": true
+  },
+  "headers": [
+    {
+      "part": "word/header1.xml",
+      "text": "",
+      "styles": []
+    },
+    {
+      "part": "word/header2.xml",
+      "text": "",
+      "styles": []
+    },
+    {
+      "part": "word/header3.xml",
+      "text": "",
+      "styles": []
+    }
+  ],
+  "footers": [
+    {
+      "part": "word/footer1.xml",
+      "text": "",
+      "styles": []
+    },
+    {
+      "part": "word/footer2.xml",
+      "text": "",
+      "styles": []
+    },
+    {
+      "part": "word/footer3.xml",
+      "text": "",
+      "styles": []
+    }
+  ]
+}
