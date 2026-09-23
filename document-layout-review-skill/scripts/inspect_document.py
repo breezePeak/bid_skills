@@ -47,6 +47,7 @@ def main():
         calls=[
             ('结构与版式','docx_audit.py',[args.input],'docx-audit.json'),
             ('标题/题注/脚注自动编号','numbering_audit.py',[args.input,'--template',template,'--template-style-json',style_json],'automatic-numbering.json'),
+            ('表格模板外观一致性','template_table_style.py',['audit',args.input,'--template',template,'--template-style-json',style_json],'table-template.json'),
             ('表格列宽/协调性/合并候选','table_layout_audit.py',[args.input,'--template-style-json',style_json],'table-layout.json'),
             ('中英文标点','contextual_punctuation.py',[args.input],'punctuation.json'),
             ('字符级文本','hard_text_audit.py',[args.input],'hard-text.json'),

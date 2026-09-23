@@ -20,7 +20,7 @@ BUNDLE=HERE.parent
 DEFAULT_TEMPLATE=BUNDLE/'assets'/'default-template.docx'
 DEFAULT_STYLE_JSON=BUNDLE/'assets'/'default-template-style.json'
 REQUIRED_GATES={'numbering','caption-policy','punctuation','hard-text','structure',
-                'template-text','template-structure','table-layout','image-inventory','field-update'}
+                'template-text','template-structure','table-template','table-layout','image-inventory','field-update'}
 
 
 def write_json(path,data):
@@ -88,6 +88,7 @@ def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,obje
     gate('structure','docx_audit.py',[candidate],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
     gate('template-text','template_usage_audit.py',[template,candidate,'--text-rules',rules_file],lambda d:d.get('status')=='passed' and d.get('text_rules_sha256')==rules_hash)
     gate('template-structure','template_conformance.py',[template,candidate],lambda d:d.get('status')=='passed' or not d.get('errors'))
+    gate('table-template','template_table_style.py',['audit',candidate,'--template',template,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
     gate('table-layout','table_layout_audit.py',[candidate,'--template-style-json',style_json],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
     rows=validate_initial(source,initial)
     actual=[o for o in inventory(Doc(candidate)) if o['kind']=='figure']
@@ -119,7 +120,7 @@ def main():
     stages=[];source=args.source if args.audit_only else args.input
     try:
         if source is None or not source.is_file() or not args.input.is_file():raise PolicyError('input-missing','输入和原始 Word 必须存在。')
-        reserved=['candidate.docx','candidate-refreshed.docx','00-numbering.docx','01-punctuation.docx','02-whitespace.docx','03-template-style.docx','04-template-usage.docx','05-tables.docx','06-layout.docx','07-final-numbering.docx']
+        reserved=['candidate.docx','candidate-refreshed.docx','00-numbering.docx','01-punctuation.docx','02-whitespace.docx','03-template-style.docx','04-template-usage.docx','04a-template-tables.docx','05-tables.docx','06-layout.docx','07-final-numbering.docx']
         if not args.audit_only and any((args.work_dir/name).resolve() in {args.input.resolve(),source.resolve()} for name in reserved):
             raise PolicyError('input-output-collision','工作目录中的阶段输出与输入重名；请选择新的工作目录，不能覆盖原文。')
 
@@ -143,7 +144,7 @@ def main():
             out=args.work_dir/(ident+'.docx');report=reports/(ident+'.json')
             if out.resolve()==current.resolve():raise PolicyError('stage-output-collision','阶段输出不能覆盖阶段输入。')
             from layout_invariant_guard import snapshot_docx,changed_invariants
-            scope={'contextual_punctuation.py':'text-content','whitespace_repair.py':'text-content','template_style_enforce.py':'text-style','template_usage_repair.py':'text-style','docx_layout_policy.py':'table-layout'}.get(script)
+            scope={'contextual_punctuation.py':'text-content','whitespace_repair.py':'text-content','template_style_enforce.py':'template-text-style','template_usage_repair.py':'template-text-style','docx_layout_policy.py':'table-layout'}.get(script)
             before=snapshot_docx(current) if scope else None
             r=run_script(script,*build(current,out,report));data=load_json(report)
             stages.append({'name':ident,'run':r,'report':str(report)})
@@ -166,6 +167,8 @@ def main():
             stage('02-whitespace','whitespace_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r])
             stage('03-template-style','template_style_enforce.py',lambda c,o,r:[template,style_json,c,'--out',o,'--json-out',r,'--text-rules',rules_file])
             stage('04-template-usage','template_usage_repair.py',lambda c,o,r:[template,c,'--out',o,'--json-out',r,'--text-rules',rules_file])
+            # Normalize from the TEMPLATE first; do not freeze erroneous source fills.
+            stage('04a-template-tables','template_table_style.py',lambda c,o,r:['repair',c,'--out',o,'--json-out',r,'--template',template,'--template-style-json',style_json])
             stage('05-tables','table_layout_repair.py',lambda c,o,r:[c,'--output',o,'--json-out',r,'--template',template])
             stage('06-layout','docx_layout_policy.py',lambda c,o,r:[c,'--output',o,'--json-out',r])
             rebound=preserved_decisions(numbered,current,first.get('object_decisions',[]))

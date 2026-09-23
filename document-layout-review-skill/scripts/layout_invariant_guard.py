@@ -338,11 +338,37 @@ def styles_without_pagination(parts: list[tuple[str, ET.Element]]) -> str:
     return sha(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
+def table_nonappearance(parts: list[tuple[str, ET.Element]]) -> str:
+    """Actual widths/structure/text formatting, excluding the owned decorations.
+
+    Allows template-based recoloring without authorizing layout or content edits.
+    Empty property wrappers are ignored because adding a color can create one.
+    """
+    from copy import deepcopy
+    drops = DECORATION | {q(W, "tblStyle")}
+    wrappers = {q(W, n) for n in ("tblPr", "tblPrEx", "trPr", "tcPr", "pPr", "rPr")}
+    rows = []
+    for name, root in parts:
+        for tbl in root.iter(q(W, "tbl")):
+            clone = deepcopy(tbl)
+            def prune(parent):
+                for child in list(parent):
+                    if child.tag in drops:
+                        parent.remove(child)
+                    else:
+                        prune(child)
+                        if child.tag in wrappers and not len(child) and not child.attrib:
+                            parent.remove(child)
+            prune(clone)
+            rows.append((name, stable_elem(clone)))
+    return sha(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
 def snapshot_docx(path: Path) -> dict:
     with zipfile.ZipFile(path, "r") as z:
         parts = parse_story_parts(z)
         return {
-            "snapshot_version": 2,
+            "snapshot_version": 3,
             "source": str(path),
             "source_sha256": sha(path.read_bytes()),
             "text_content": collect_text_content(parts),
@@ -352,6 +378,7 @@ def snapshot_docx(path: Path) -> dict:
             "table_structure": table_structure(parts),
             "table_geometry": table_geometry(parts),
             "table_appearance": table_appearance(parts, z),
+            "table_nonappearance": table_nonappearance(parts),
             "drawing_content": drawing_content(parts),
             "text_style_without_pagination": styles_without_pagination(parts),
             "drawings": drawings(parts),
@@ -409,6 +436,16 @@ INVARIANTS["figure-pagination"] = {
     "table_structure", "table_geometry", "table_appearance", "drawings",
     "sections", "media", "relationships",
 }
+
+
+# Only registered template-application stages use these scopes. Their output
+# must ALSO pass the template-conformance audit; a scope PASS alone is not enough.
+# Existing layout/text scopes retain their original collateral-change guards.
+INVARIANTS["template-table-style"] = {
+    "text_content", "non_table_text_style", "block_structure", "table_structure",
+    "table_nonappearance", "drawings", "sections", "media", "relationships",
+}
+INVARIANTS["template-text-style"] = INVARIANTS["text-style"] - {"table_appearance"}
 
 
 def changed_invariants(baseline: dict, candidate: dict, scope: str) -> list[str]:

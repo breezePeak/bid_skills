@@ -12,6 +12,22 @@ from review_pipeline import REQUIRED_GATES, write_json
 
 
 class ReleaseGate(FigureGate):
+    def setUp(self):
+        super().setUp()
+        # The release contract now requires an actual table template, not a
+        # synthetic template containing headings only.
+        from docx import Document
+        d=Document(self.template);table=d.add_table(rows=2,cols=2);table.style='Table Grid'
+        table.cell(0,0).text='设备';table.cell(0,1).text='数量'
+        table.cell(1,0).text='示例';table.cell(1,1).text='1';d.save(self.template)
+
+    def normalize(self,plan=None):
+        result=super().normalize(plan)
+        import template_table_style as table_style
+        temporary=self.root/'template-tables.docx'
+        table_style.repair(self.out,temporary,self.template);temporary.replace(self.out)
+        return result
+
     def bundle(self):
         a,b,pages=self.data();initial=self.root/'initial.json';write_json(initial,a)
         style=self.root/'template-style.json';write_json(style,{})
@@ -80,6 +96,20 @@ class ReleaseGate(FigureGate):
         m,v=self.bundle();before=self.source.read_bytes()
         with self.assertRaises(n.PolicyError):g.finalize(m,v,self.source)
         self.assertEqual(self.source.read_bytes(),before)
+
+    def test_real_template_recheck_rejects_fake_pass_report(self):
+        m,v=self.bundle()
+        from test_numbering_policy import rewrite
+        def change(files):
+            root=n.parse(files['word/document.xml']);pr=root.find('.//w:tc/w:tcPr',n.NS)
+            pr.append(n.node('shd',val='clear',fill='FF0000'));files['word/document.xml']=n.dump(root)
+        rewrite(self.out,change)
+        h=n.file_digest(self.out);m['candidate_sha256']=h;v['candidate_sha256']=h;v['figures']['candidate_sha256']=h
+        field_gate=next(x for x in m['gates'] if x['id']=='field-update')
+        data=json.loads(Path(field_gate['report']).read_text());data['output_sha256']=h
+        write_json(field_gate['report'],data);field_gate['report_sha256']=n.file_digest(Path(field_gate['report']))
+        with self.assertRaises(n.PolicyError) as ctx:g.validate_release(m,v)
+        self.assertEqual(ctx.exception.code,'final-table-template-failed')
 
 
 def load_tests(loader, tests, pattern):

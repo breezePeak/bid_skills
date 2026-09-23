@@ -13,6 +13,7 @@ MODULES = (
     'test_figure_gate',
     'test_release_gate',
     'test_pipeline_boundary',
+    'test_template_authority',
 )
 
 def main():

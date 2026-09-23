@@ -260,7 +260,9 @@ class AppearanceTests(unittest.TestCase):
             self.assertIn(required, skill)
         self.assertNotIn('不能只缩放、擦线或局部挪框。', skill)
         self.assertIn('独占一页', skill)
-        self.assertIn('原来没有底色', skill)
+        self.assertIn('模板表头无底色', skill)
+        self.assertIn('待修文档提供内容，不提供格式标准', skill)
+        self.assertNotIn('原来没有底色，也是一种必须保留的外观状态', skill)
 
     def test_writer_rejects_overwriting_input(self):
         with self.assertRaises(ValueError):

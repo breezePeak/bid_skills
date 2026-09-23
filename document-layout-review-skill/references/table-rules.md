@@ -8,33 +8,39 @@ Passing XML validity, keeping a table style ID, or merely staying inside page ma
 
 ## Template authority
 
-When an active template exists:
+The active template is the formatting standard for every target table; the source
+Word supplies content, not an alternative design. Existing target formatting must
+be corrected even when it looks intentional. A template with no header fill or
+no borders defines an explicit absence, not an unspecified property.
 
-1. apply only the template requirements explicitly mapped to this table and property; preserve the approved source appearance for unspecified decorative properties;
-2. preserve template-specific physical structure where it is an approved contract;
-3. treat existing template column proportions as a **prior/reference**, not an unconditional final answer;
-4. if actual table content is materially different from the template example, rebalance widths using the current table's header and body content pressure;
-5. structural layout repairs are required when old widths are visually broken or incompatible with actual content.
+Run the existing template text step, then `template_table_style.py repair` and its
+`audit`. Apply the template's table style, fills, borders and text colors. Resolve
+its style inheritance/conditional formatting and remove conflicting direct,
+paragraph/run, or row-exception fills. The template's explicit canonical table
+style applies to ordinary tables even when their headers/column counts differ.
+Do not copy a sample's physical grid merely to adopt its appearance. Where an
+uploaded template genuinely contains different table styles, use its corresponding
+sample/header or declared canonical style; do not choose the most frequent style.
 
-Do not use “the template already had this width” as a reason to preserve an obviously unbalanced table.
+Only after template conformance passes, snapshot the normalized table and perform
+width repair. Keep the **normalized template appearance** during that later step.
+Do not preserve an original gray header when the template header is unshaded; do
+not remove the template's intended color under a blanket “no color” rule.
 
-## Layout does not authorize restyling
+Template-specific structural contracts remain separate. Existing width proportions
+are a reference when the sample has different content, unless the template/user
+explicitly fixes those widths. Continue using content-aware reflow and visual QA.
 
-Keep the source table's approved `tblStyle`, `tblLook`, fills, borders and colors
-during width repair. A header with no fill must remain without an added fill; an
-existing approved colored header must not be indiscriminately stripped. Never
-select the most frequent template table style as a substitute for an explicit
-mapping. Explicit user/template color requirements are applied and recorded as a
-separate style operation before establishing the approved layout baseline.
+```bash
+python scripts/template_table_style.py repair input.docx --template active-template.docx \
+  --template-style-json active-template-style.json --out template-tables.docx --json-out changes.json
+python scripts/template_table_style.py audit template-tables.docx --template active-template.docx \
+  --template-style-json active-template-style.json --json-out template-check.json
+```
 
-Run `layout_invariant_guard.py` before/after the layout step. It checks direct
-shading as well as inherited and conditional table-style decorations. A style ID
-remaining unchanged is not sufficient if its definition has changed.
-
-`table_layout_repair.py` no longer applies paragraph styles, cleans text or
-changes cell structure during a width repair. Keep using the existing text-style
-and semantic-structure steps for those tasks. Its writer refuses to publish a
-candidate that changes protected appearance or other table-layout invariants.
+These steps are built into inspection, repair, final audit and release. The
+ordinary `table-layout` guard still prevents later recoloring; it must not be used
+to block the preceding authorized template normalization.
 
 ## Required inspection order
 
@@ -215,6 +221,8 @@ Use deliberate internal cell margins. Text must not touch borders. Keep margins 
 - only the template-approved section may use landscape orientation.
 
 ## Hard failures
+
+A table whose fills/borders/text colors differ from the active template fails even if its original appearance was preserved.
 
 A table fails when any of the following is true:
 

@@ -70,6 +70,9 @@ def validate_release(manifest, visual):
     # Rerun the highest-risk policy on the current bytes, not merely a stored PASS.
     checked=audit_document(candidate,Path(m['template']),Path(m['template_style_json']),m.get('object_plan'))
     if checked['status']!='passed':raise PolicyError('final-numbering-failed','交付前重新核验题注/标题失败。',issues=checked['issues'])
+    from template_table_style import audit as audit_table_template
+    table_checked=audit_table_template(candidate,Path(m['template']),Path(m['template_style_json']))
+    if table_checked['status']!='passed':raise PolicyError('final-table-template-failed','交付前表格外观不符合模板。',issues=table_checked['issues'])
     image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages)
     outstanding=review_findings(gate_map['table-layout']);decisions=v.get('table_reviews',[])
     if not isinstance(decisions,list) or len(decisions)!=len(outstanding) or {r.get('issue_sha256') for r in decisions}!=set(outstanding):
@@ -78,7 +81,7 @@ def validate_release(manifest, visual):
         if row.get('decision') not in {'keep_separate','acceptable'} or not str(row.get('reason','')).strip():
             raise PolicyError('table-review-unresolved','表格 review 未解决；需要修改的对象须先修复并重跑审计。')
     return {'status':'passed','candidate':str(candidate),'candidate_sha256':m['candidate_sha256'],
-            'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked}
+            'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked,'table_template_recheck':table_checked}
 
 
 def finalize(manifest,visual,out):

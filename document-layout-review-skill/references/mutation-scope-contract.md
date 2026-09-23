@@ -4,7 +4,7 @@
 
 ## 1. 基本原则
 
-每轮修复只能声明一个 `repair_scope`。
+每轮修复只能声明一个 `repair_scope`。**先按模板统一格式，再保护合格结果。** 原始文档用于内容和原图对照，不是外观基准；模板应用与后续布局保护不能混为一轮。
 
 修复前：
 
@@ -25,6 +25,8 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 | scope | 本轮允许变化 | 必须保持不变 |
 |---|---|---|
 | `automatic-numbering` | 已确认的标题/题注/脚注编号、编号定义和域，以及必要脚注内容迁移与关系注册 | 表格结构与几何、图片/Shape、媒体、页面/分节；非目标文字由最小范围替换和内容复核保护 |
+| `template-text-style` | 已登记的模板文字应用步骤；按模板改变段落/文字样式及其继承外观 | 文字内容、表格结构与直接几何、图片/媒体、关系、分节；输出还须通过模板文字/表格审计 |
+| `template-table-style` | 按实际模板统一表格样式、底色、边框、文字颜色 | 内容、列宽/合并、非目标文字、图片/媒体、关系、分节；必须通过 `template_table_style.py audit` |
 | `text-style` | 普通正文/标题 run、paragraph 样式 | 可见文字内容、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `text-content` | 明确命中的字符内容 | run/p 样式、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `table-text-style` | 表格单元格内 run/p 样式 | 可见文字内容、表格结构与几何、表外文字样式、图片/Shape、媒体、关系、页面/分节 |
@@ -36,7 +38,7 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 
 禁止 `scope=all`。这张表是修复范围，不是重新设计许可。`flowchart-redraw` 只可用于问题清单确认的图内缺陷或用户明确重设计要求，仍须核对源风格。
 
-所有范围新增 `table_appearance` 保护：表格样式/条件样式、直接及继承的底色、边框和颜色。`image-layout` 额外冻结媒体、关系和图内内容；不能用该 scope 换一张新图。新快照新增字段，旧快照缺字段时必须从原基准重新生成，不能当作通过。
+后续文字/布局范围保留 `table_appearance` 保护，基准是已符合模板的结果。模板应用专用范围允许纠正旧外观，同时用真实模板审计限制变化；不是一律禁止改变颜色。`image-layout` 额外冻结媒体、关系和图内内容；不能用该 scope 换一张新图。新快照新增字段，旧快照缺字段时必须从原基准重新生成，不能当作通过。
 
 `automatic-numbering` 必须独立执行。`numbering_repair.py` 内部已比较本范围冻结项；仍须通过 `numbering_audit.py` 和最新页面复查。此范围允许必要的域/脚注结构变化，不允许重写业务内容；不能把单纯的范围检查通过当作内容与编号均正确。
 
@@ -72,16 +74,16 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 
 禁止在同一轮同时“统一表格文字样式 + 自动重排列宽”。
 
-先执行 `table-text-style`：
+先按模板执行文字样式步骤（模板批量应用用 `template-text-style`，局部维护用 `table-text-style`）：
 
 - 修字体/字号/段落；
 - 首行缩进 = 0；
 - hanging = 0；
 - 表格几何完全冻结。
 
-通过 guard 后，若表格本身仍有布局问题，再单独执行 `table-layout`。列宽脚本不再顺手设置段落样式或单倍行距，避免覆盖刚确认的文字基准。
+文字完成后执行 `template-table-style` 和模板审计，通过后再单独执行 `table-layout`。列宽脚本不再顺手设置段落样式或单倍行距，避免覆盖刚确认的文字基准。
 
-外观变更仅能来自明确用户要求或适用于该表的模板规定。先记录来源、对象、属性和前后变化，单独完成并复核后再建立布局基准。不得以“模板里最常见”“模型认为更好看”作为授权，也不得用失败候选重新快照掩盖变化。
+本次生效模板已是格式修改依据，无需用户逐表授权“删除灰底”。先按模板修正外观并通过符合性审计，再建立布局快照。不能用“模板最常见”“模型认为好看”猜模板内部的真实冲突，也不能给错误候选重新快照掩盖失败。
 
 ## 6. 图片默认冻结
 
@@ -99,6 +101,8 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 - 重写 DrawingML/VML 造成 anchor/inline 变化。
 
 ## 7. 最小修改
+
+完整落实模板是前提；以下最小范围限制只用于避免内容损坏，不用于保留与模板冲突的旧格式。
 
 优先顺序：
 
@@ -123,7 +127,7 @@ Guard FAIL 时：
 - 不得继续下一轮；
 - 必须回滚或从上一份 PASS 候选重新修。
 
-唯一例外是用户明确要求同时改变该非目标对象，此时应结束当前轮并重新声明新的 scope。
+模板不一致不是放宽布局 guard 的理由，应回到模板应用范围纠正并审计；另有用户特殊要求时在对应范围落实，再建立新的合格基准。
 
 ## 标题/题注和真实图面补充
 
