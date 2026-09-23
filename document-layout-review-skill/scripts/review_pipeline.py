@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse, hashlib, json, shutil, subprocess, sys
 from pathlib import Path
+from text_rules import load_rules, load_profile, expected_body_props, write_rules, rules_digest
 
 HERE = Path(__file__).resolve().parent
 BUNDLE = HERE.parent
@@ -62,6 +63,8 @@ def main():
     ap.add_argument("--work-dir", type=Path, required=True)
     ap.add_argument("--template", type=Path)
     ap.add_argument("--template-style-json", type=Path)
+    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON")
+    ap.add_argument("--numbering-plan", type=Path, help="可选：Agent 确认的手工编号/脚注定位映射")
     args = ap.parse_args()
 
     if not args.input.is_file():
@@ -75,6 +78,12 @@ def main():
 
     try:
         template, style_json = resolve_template(args, reports)
+        rules = load_rules(args.text_rules)
+        expected_body_props(load_profile(template), rules)
+        rules_file = reports / "text-rules.effective.json"
+        write_rules(rules_file, rules)
+        rules_hash = rules_digest(rules)
+        rule_args = ["--text-rules", rules_file]
     except SystemExit:
         raise
     except Exception as e:
@@ -85,14 +94,28 @@ def main():
     stages = []
 
     def run_stage(name: str, script: str, cmd_args, out: Path, report: Path):
-        nonlocal_current = None  # only for readability in tracebacks
         r = run_script(script, *cmd_args)
         stages.append({"name": name, "run": r, "report": str(report)})
+        if script in {"template_style_enforce.py", "template_usage_repair.py"}:
+            data = load_json(report) or {}
+            if data.get("text_rules_sha256") != rules_hash:
+                raise RuntimeError(f"{name}未使用本次文字规则，停止后续修复")
         if not r["ok"] or not out.is_file():
             raise RuntimeError(f"{name}失败")
         return out
 
     try:
+        # Run before character/style changes so optional semantic anchors stay valid.
+        out = args.work_dir / "00-automatic-numbering.docx"
+        report = reports / "00-automatic-numbering.json"
+        numbering_args = ["--numbering-plan", args.numbering_plan] if args.numbering_plan else []
+        current = run_stage(
+            "标题/题注/脚注自动编号修复",
+            "numbering_repair.py",
+            [current, "--out", out, "--json-out", report, *numbering_args],
+            out, report,
+        )
+
         out = args.work_dir / "01-punctuation.docx"
         report = reports / "01-punctuation.json"
         current = run_stage(
@@ -116,7 +139,7 @@ def main():
         current = run_stage(
             "模板样式应用",
             "template_style_enforce.py",
-            [template, style_json, current, "--out", out, "--json-out", report],
+            [template, style_json, current, "--out", out, "--json-out", report, *rule_args],
             out, report,
         )
 
@@ -125,7 +148,7 @@ def main():
         current = run_stage(
             "直接格式污染修复",
             "template_usage_repair.py",
-            [template, current, "--out", out, "--json-out", report],
+            [template, current, "--out", out, "--json-out", report, *rule_args],
             out, report,
         )
 
@@ -158,9 +181,16 @@ def main():
         report = reports / report_name
         r = run_script(script, *script_args(report), allow=(0, 2, 3, 4))
         data = load_json(report)
-        ok = bool(passed(data))
+        ok = bool(r["ok"] and passed(data))
+        if script == "template_usage_audit.py":
+            ok = ok and bool(data and data.get("text_rules_sha256") == rules_hash)
+        if script == "numbering_audit.py":
+            ok = ok and r["returncode"] == 0
         gates.append({"name": name, "passed": ok, "report": str(report), "result": data, "run": r})
 
+    gate("标题/题注/脚注自动编号", "numbering_audit.py", "gate-automatic-numbering.json",
+         lambda report: [candidate, "--json-out", report],
+         lambda d: d is not None and d.get("status") == "passed")
     gate("标点", "contextual_punctuation.py", "gate-punctuation.json",
          lambda report: [candidate, "--json-out", report],
          lambda d: d is not None and d.get("issue_count", 0) == 0)
@@ -171,7 +201,7 @@ def main():
          lambda report: [candidate, "--json-out", report],
          lambda d: d is not None and not any(i.get("severity") == "error" for i in d.get("issues", [])))
     gate("模板实际使用", "template_usage_audit.py", "gate-template-usage.json",
-         lambda report: [template, candidate, "--json-out", report],
+         lambda report: [template, candidate, "--json-out", report, *rule_args],
          lambda d: d is not None and d.get("status") == "passed")
     gate("模板结构一致性", "template_conformance.py", "gate-template-conformance.json",
          lambda report: [template, candidate, "--json-out", report],
@@ -200,6 +230,8 @@ def main():
         "input": str(args.input),
         "template": str(template),
         "template_style_json": str(style_json),
+        "text_rules": str(rules_file),
+        "text_rules_sha256": rules_hash,
         "candidate": str(candidate),
         "candidate_sha256": sha256(candidate),
         "status": status,

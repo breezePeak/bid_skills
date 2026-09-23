@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Repair body-format drift at run granularity.
-
-Any visible ordinary-body run whose explicit font/size conflicts with the template
-baseline is repaired locally. Direct bold/italic are also removed whenever the body
-baseline itself is not bold/italic. Intentional emphasis should be expressed through
-an allowed character style instead of stray direct formatting.
-"""
+"""Repair body formatting using the same per-task rules as the audit."""
 from __future__ import annotations
 
 import argparse
 import json
 import zipfile
 from pathlib import Path
-from xml.etree import ElementTree as ET
+from lxml import etree as ET
 
-from template_style_profile import extract_profile
+from text_rules import (
+    body_paragraph_items,
+    TextRulesError, load_rules, load_profile, expected_body_props, effective_run_props,
+    font_conflicts, rules_digest, ensure_rpr, restore_emphasis, repair_effective_props,
+)
+from body_font_exceptions import (
+    preserved_body_fonts,
+    body_run_font_snapshot,
+    clear_fonts_preserving_body_exception,
+    restore_body_font_snapshot,
+)
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
@@ -102,18 +106,16 @@ def style_run_overrides(profile: dict, sid: str | None) -> dict:
     return out
 
 
-def comparable_font_conflicts(actual: dict[str, str], expected: dict[str, str]) -> bool:
-    for key in FONT_KEYS:
-        if key in actual and key in expected and actual[key] != expected[key]:
-            return True
-    return False
+def comparable_font_conflicts(actual: dict[str, str], expected: dict[str, str],
+                              rules: dict | None = None) -> bool:
+    return bool(font_conflicts(actual, expected, load_rules() if rules is None else rules))
 
 
 def value_conflict(actual: str | None, expected: object | None) -> bool:
     return actual is not None and expected is not None and str(actual) != str(expected)
 
 
-def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expected: dict) -> bool:
+def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expected: dict, rules: dict | None = None) -> bool:
     if rpr is None:
         return False
     rs = rpr.find("w:rStyle", NS)
@@ -121,7 +123,7 @@ def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expe
     if not rsid:
         return False
     props = style_run_overrides(target_profile, rsid)
-    if comparable_font_conflicts(props.get("fonts") or {}, expected.get("fonts") or {}):
+    if comparable_font_conflicts(props.get("fonts") or {}, expected.get("fonts") or {}, rules):
         return True
     if value_conflict(props.get("size_half_points"), expected.get("size_half_points")):
         return True
@@ -138,17 +140,19 @@ def remove_direct_emphasis(
     *,
     expected_bold: bool,
     expected_italic: bool,
+    rules: dict | None = None,
 ) -> list[str]:
     if rpr is None:
         return []
+    rules = load_rules() if rules is None else rules
     removed: list[str] = []
-    if not expected_bold:
+    if rules["body"]["bold"] == "forbid" or (rules["body"]["bold"] == "template" and not expected_bold):
         for tag in ("b", "bCs"):
             node = rpr.find(f"w:{tag}", NS)
             if node is not None and enabled(rpr, tag):
                 rpr.remove(node)
                 removed.append(tag)
-    if not expected_italic:
+    if rules["body"]["italic"] == "forbid" or (rules["body"]["italic"] == "template" and not expected_italic):
         for tag in ("i", "iCs"):
             node = rpr.find(f"w:{tag}", NS)
             if node is not None and enabled(rpr, tag):
@@ -157,9 +161,12 @@ def remove_direct_emphasis(
     return removed
 
 
-def repair(template: Path, src: Path, out: Path) -> dict:
-    template_profile = extract_profile(template)
-    target_profile = extract_profile(src)
+def repair(template: Path, src: Path, out: Path, text_rules: Path | dict | None = None) -> dict:
+    if src.resolve() == out.resolve() or template.resolve() == out.resolve():
+        raise TextRulesError("输出路径必须与输入文档、模板不同。")
+    rules = load_rules(text_rules)
+    template_profile = load_profile(template)
+    target_profile = load_profile(src)
     roles = template_profile.get("semantic_roles", {})
     body_sid = (roles.get("body") or {}).get("style_id")
     heading_sids = {
@@ -172,7 +179,7 @@ def repair(template: Path, src: Path, out: Path) -> dict:
     if caption_role.get("style_id"):
         caption_sids.add(caption_role["style_id"])
 
-    expected = style_run_props(template_profile, body_sid)
+    expected = expected_body_props(template_profile, rules)
     expected_fonts = expected.get("fonts") or {}
     expected_size = expected.get("size_half_points")
     expected_size_cs = expected.get("size_cs_half_points") or expected_size
@@ -182,23 +189,9 @@ def repair(template: Path, src: Path, out: Path) -> dict:
     with zipfile.ZipFile(src) as z:
         root = ET.fromstring(z.read("word/document.xml"))
 
-    table_paras = {
-        id(p)
-        for tbl in root.findall(".//w:tbl", NS)
-        for p in tbl.findall(".//w:p", NS)
-    }
-
     changes = []
-    in_body = False
-    for idx, p in enumerate(root.findall(".//w:p", NS), 1):
+    for idx, p in body_paragraph_items(root, template_profile, target_profile):
         psid = sid(p)
-        if psid in heading_sids:
-            in_body = True
-            continue
-        if psid == body_sid:
-            in_body = True
-        if not in_body or id(p) in table_paras or psid in caption_sids:
-            continue
 
         raw = text(p).strip()
         if not raw:
@@ -210,6 +203,7 @@ def repair(template: Path, src: Path, out: Path) -> dict:
             pmark_rpr,
             expected_bold=expected_bold,
             expected_italic=expected_italic,
+            rules=rules,
         )
         if pmark_removed:
             changes.append(
@@ -230,18 +224,16 @@ def repair(template: Path, src: Path, out: Path) -> dict:
             rt = "".join(t.text or "" for t in r.findall(".//w:t", NS))
             if not rt:
                 continue
-            rpr = r.find("w:rPr", NS)
-            if rpr is None:
-                continue
+            before = ET.tostring(r)
+            snapshot = effective_run_props(target_profile, psid, r.find("w:rPr", NS))
+            kept_fonts = body_run_font_snapshot(target_profile, psid, r, rules)
+            rpr = ensure_rpr(r)
             removed: list[str] = []
 
             actual_fonts = run_fonts(rpr)
-            if actual_fonts and comparable_font_conflicts(actual_fonts, expected_fonts):
-                node = rpr.find("w:rFonts", NS)
-                if node is not None:
-                    rpr.remove(node)
+            if actual_fonts and comparable_font_conflicts(actual_fonts, expected_fonts, rules):
+                if clear_fonts_preserving_body_exception(rpr, rules):
                     removed.append("rFonts")
-
             for tag, exp in (("sz", expected_size), ("szCs", expected_size_cs)):
                 node = rpr.find(f"w:{tag}", NS)
                 val = node.get(qn("val")) if node is not None else None
@@ -249,37 +241,23 @@ def repair(template: Path, src: Path, out: Path) -> dict:
                     rpr.remove(node)
                     removed.append(tag)
 
-            # A character style that changes font/size away from the body baseline
-            # is formatting pollution. Character styles that only provide semantic
-            # emphasis (for example bold) are preserved.
-            if character_style_conflicts(target_profile, rpr, expected):
-                node = rpr.find("w:rStyle", NS)
-                if node is not None:
-                    rpr.remove(node)
-                    removed.append("rStyle")
-
-            # Direct bold/italic no longer use a paragraph coverage threshold.
-            # One stray run is enough to produce the visible defect shown by users.
-            removed.extend(
-                remove_direct_emphasis(
-                    rpr,
-                    expected_bold=expected_bold,
-                    expected_italic=expected_italic,
-                )
-            )
-
+            # Keep unrelated character-style properties; repair their conflicting
+            # font/size locally rather than removing the entire character style.
+            removed.extend(remove_direct_emphasis(
+                rpr, expected_bold=expected_bold, expected_italic=expected_italic, rules=rules,
+            ))
             if removed:
-                changes.append(
-                    {
-                        "paragraph": idx,
-                        "run": run_idx,
-                        "removed": removed,
-                        "text": rt[:120],
-                        "scope": "run",
-                    }
-                )
+                restore_body_font_snapshot(r, kept_fonts)
+            if any(rules["body"][key] == "preserve" for key in ("bold", "italic")):
+                restore_emphasis(rpr, snapshot, rules)
+            updated = repair_effective_props(target_profile, psid, r, expected, rules)
             if len(rpr) == 0:
                 r.remove(rpr)
+            if ET.tostring(r) != before:
+                changes.append({
+                    "paragraph": idx, "run": run_idx, "removed": removed,
+                    "updated": updated, "text": rt[:120], "scope": "run",
+                })
 
     xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -292,6 +270,8 @@ def repair(template: Path, src: Path, out: Path) -> dict:
         "output": str(out),
         "change_count": len(changes),
         "expected_body_run": expected,
+        "text_rules": rules,
+        "text_rules_sha256": rules_digest(rules),
         "changes": changes,
     }
 
@@ -302,14 +282,18 @@ def main() -> int:
     ap.add_argument("input", type=Path)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--json-out", type=Path)
+    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON")
     a = ap.parse_args()
-    result = repair(a.template, a.input, a.out)
+    try:
+        result = repair(a.template, a.input, a.out, a.text_rules)
+    except TextRulesError as exc:
+        result = {"status": "failed", "error": str(exc), "code": "text-rules-invalid"}
     payload = json.dumps(result, ensure_ascii=False, indent=2)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(payload + "\n", encoding="utf-8")
     print(payload)
-    return 0
+    return 2 if result.get("status") == "failed" else 0
 
 
 if __name__ == "__main__":

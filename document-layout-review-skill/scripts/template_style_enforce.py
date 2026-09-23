@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""按照已确认的模板样式，把 DOCX 正文实际使用的样式拉回模板基线。
-
-设计目标：
-- 模板存在时，不只“检查 styles.xml”，而是让正文、标题、表格、题注真正使用模板样式；
-- 尽量保留局部加粗/斜体等有意强调，只清理会遮蔽模板字体与字号的直接格式；
-- 默认技术标可直接使用固定 JSON，不重复解析默认模板；
-- 技术标模式优先从固定样式 JSON 自动识别，避免调用方漏传参数导致正文未被处理。
-"""
+"""应用已确认的模板样式，并读取本次正文规则。"""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +9,17 @@ import re
 import zipfile
 from pathlib import Path
 from lxml import etree
+from numbering_core import preserve_heading_numbering
+from text_rules import (
+    body_paragraph_items,
+    TextRulesError, load_rules, load_profile, expected_body_props, effective_run_props,
+    rules_digest, ensure_rpr, restore_emphasis, apply_explicit_body_overrides,
+)
+from body_font_exceptions import (
+    body_run_font_snapshot,
+    clear_fonts_preserving_body_exception,
+    restore_body_font_snapshot,
+)
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
@@ -85,18 +89,23 @@ def clear_paragraph_overrides(p: etree._Element, *, preserve_numpr: bool) -> int
     return removed
 
 
-def clear_run_font_size_overrides(p: etree._Element, *, clear_heading_emphasis: bool = False) -> int:
-    """清理会覆盖语义样式的 run 字体/字号直接格式。
-
-    注意这里必须逐个 rPr 清理，而不是按段落覆盖率判断。只要某个正文 run
-    带有错误字体或字号，就可能在页面上形成局部突变。
-    """
+def clear_run_font_size_overrides(
+    p: etree._Element,
+    *,
+    clear_heading_emphasis: bool = False,
+    preserve_body_black: bool = False,
+    text_rules: dict | None = None,
+) -> int:
+    """逐个清理字体/字号覆盖；正文保留项由本次文字规则决定。"""
     removed = 0
     for rpr in p.xpath(".//w:rPr", namespaces=NS):
         tags = ["rFonts", "sz", "szCs"]
         if clear_heading_emphasis:
             tags += ["b", "bCs", "i", "iCs"]
         for tag in tags:
+            if tag == "rFonts" and preserve_body_black:
+                removed += int(clear_fonts_preserving_body_exception(rpr, text_rules))
+                continue
             node = rpr.find(Q(tag))
             if node is not None:
                 rpr.remove(node)
@@ -129,17 +138,17 @@ def replace_style_definitions(target_styles: bytes, template_styles: bytes, styl
     return etree.tostring(troot, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def paragraph_section_map(body: etree._Element) -> dict[int, int]:
+def paragraph_section_map(body: etree._Element) -> dict[etree._Element, int]:
     section = 1
-    out: dict[int, int] = {}
+    out: dict[etree._Element, int] = {}
     for child in body:
         if child.tag == Q("p"):
-            out[id(child)] = section
+            out[child] = section
             if child.find("w:pPr/w:sectPr", namespaces=NS) is not None:
                 section += 1
         elif child.tag == Q("tbl"):
             for p in child.xpath(".//w:p", namespaces=NS):
-                out[id(p)] = section
+                out[p] = section
     return out
 
 
@@ -193,8 +202,23 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--json-out", type=Path)
     ap.add_argument("--technical-bid", action="store_true")
+    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON")
     a = ap.parse_args()
 
+    try:
+        if a.out.resolve() in {a.docx.resolve(), a.template.resolve()}:
+            raise TextRulesError("输出路径必须与输入文档、模板不同。")
+        rules = load_rules(a.text_rules)
+        template_profile = load_profile(a.template)
+        expected_body_props(template_profile, rules)
+    except TextRulesError as exc:
+        result = {"status": "failed", "code": "text-rules-invalid", "error": str(exc)}
+        if a.json_out:
+            a.json_out.parent.mkdir(parents=True, exist_ok=True)
+            a.json_out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
+    source_profile = load_profile(a.docx)
     contract = load_contract(a.style_json)
     roles = contract["roles"]
     technical_bid = detect_technical_bid(contract, a.technical_bid)
@@ -211,15 +235,22 @@ def main() -> int:
         if "word/theme/theme1.xml" in tnames and "word/theme/theme1.xml" in dnames:
             target_files["word/theme/theme1.xml"] = zt.read("word/theme/theme1.xml")
         root = etree.fromstring(target_files["word/document.xml"])
+        preserved_heading_numbering = preserve_heading_numbering(
+            root, zd.read("word/styles.xml"),
+            zd.read("word/numbering.xml") if "word/numbering.xml" in dnames else None,
+        )
         body = root.find("w:body", namespaces=NS)
         if body is None:
             raise SystemExit("document.xml 缺少 w:body")
         sections = paragraph_section_map(body)
+        body_candidates = {p for _, p in body_paragraph_items(root, template_profile, source_profile)}
         counts: dict[str, int] = {}
         override_removed = 0
         pstyle_changed = 0
         for p in root.xpath(".//w:p", namespaces=NS):
-            role = role_for_paragraph(p, roles, sections.get(id(p), 1), technical_bid)
+            role = role_for_paragraph(p, roles, sections.get(p, 1), technical_bid)
+            if role is None and p in body_candidates and roles.get("body"):
+                role = "body"
             if role is None:
                 continue
             sid = roles.get(role)
@@ -227,6 +258,14 @@ def main() -> int:
                 continue
             old = p.find("w:pPr/w:pStyle", namespaces=NS)
             old_sid = old.get(Q("val")) if old is not None else None
+            kept_fonts = [
+                (r, body_run_font_snapshot(source_profile, old_sid, r, rules))
+                for r in p.xpath(".//w:r[w:t]", namespaces=NS)
+            ] if role == "body" else []
+            kept_emphasis = [
+                (r, effective_run_props(source_profile, old_sid, r.find("w:rPr", NS)))
+                for r in p.xpath(".//w:r[w:t]", namespaces=NS)
+            ] if role == "body" else []
             if old_sid != sid:
                 set_pstyle(p, sid)
                 pstyle_changed += 1
@@ -234,8 +273,19 @@ def main() -> int:
             if role not in {"image_paragraph"}:
                 override_removed += clear_paragraph_overrides(p, preserve_numpr=preserve_numpr)
                 override_removed += clear_run_font_size_overrides(
-                    p, clear_heading_emphasis=role.startswith("heading")
+                    p,
+                    clear_heading_emphasis=role.startswith("heading"),
+                    preserve_body_black=role == "body",
+                    text_rules=rules,
                 )
+                for run, fonts in kept_fonts:
+                    restore_body_font_snapshot(run, fonts)
+                for run, snapshot in kept_emphasis:
+                    rpr = ensure_rpr(run)
+                    restore_emphasis(rpr, snapshot, rules)
+                    apply_explicit_body_overrides(rpr, rules)
+                    if len(rpr) == 0:
+                        run.remove(rpr)
             counts[role] = counts.get(role, 0) + 1
         target_files["word/document.xml"] = etree.tostring(
             root, xml_declaration=True, encoding="UTF-8", standalone=True
@@ -247,10 +297,13 @@ def main() -> int:
             zo.writestr(name, data)
     report = {
         "status": "ok",
+        "text_rules": rules,
+        "text_rules_sha256": rules_digest(rules),
         "style_contract": str(a.style_json),
         "technical_bid_mode": technical_bid,
         "roles_applied": counts,
         "paragraph_style_changes": pstyle_changed,
+        "inherited_heading_numbering_preserved": preserved_heading_numbering,
         "direct_overrides_removed": override_removed,
     }
     text = json.dumps(report, ensure_ascii=False, indent=2)

@@ -1,0 +1,10 @@
+{
+  "body": {
+    "preserve_fonts": ["黑体", "SimHei"],
+    "forbidden_fonts": [],
+    "fonts": {},
+    "size_pt": null,
+    "bold": "template",
+    "italic": "template"
+  }
+}

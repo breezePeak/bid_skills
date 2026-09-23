@@ -205,6 +205,11 @@ def snapshot_docx(path: Path) -> dict:
 
 
 INVARIANTS = {
+    # Native-numbering conversion changes number text/fields and may move note
+    # paragraphs into footnotes.xml. Other visual objects remain frozen.
+    "automatic-numbering": {
+        "table_structure", "table_geometry", "drawings", "sections", "media",
+    },
     "text-style": {
         "text_content", "block_structure", "table_structure", "table_geometry",
         "drawings", "sections", "media", "relationships",

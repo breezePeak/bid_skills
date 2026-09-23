@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Audit actual body formatting at run granularity.
-
-Body font, size, and direct bold/italic are structural formatting. A single
-visible body run whose direct formatting conflicts with the body baseline is a
-release-blocking error. Intentional emphasis must be represented by an allowed
-character style (or be explicitly requested by the user), not by stray direct
-formatting in ordinary body text.
-"""
+"""Audit ordinary body text against the active template and per-task rules."""
 from __future__ import annotations
 
 import argparse
@@ -15,7 +8,12 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from template_style_profile import extract_profile
+from text_rules import (
+    body_paragraph_items,
+    TextRulesError, load_rules, load_profile, expected_body_props, effective_run_props,
+    font_conflicts, rules_digest, EMPHASIS, run_font_slots,
+)
+from body_font_exceptions import preserved_body_fonts
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
@@ -105,20 +103,16 @@ def style_run_overrides(profile: dict, sid: str | None) -> dict:
     return out
 
 
-def comparable_font_conflicts(actual: dict[str, str], expected: dict[str, str]) -> dict:
-    """Return only conflicts we can determine without resolving theme fonts."""
-    bad = {}
-    for key in FONT_KEYS:
-        if key in actual and key in expected and actual[key] != expected[key]:
-            bad[key] = {"actual": actual[key], "expected": expected[key]}
-    return bad
+def comparable_font_conflicts(actual: dict[str, str], expected: dict[str, str],
+                              rules: dict | None = None) -> dict:
+    return font_conflicts(actual, expected, load_rules() if rules is None else rules)
 
 
 def value_conflict(actual: str | None, expected: object | None) -> bool:
     return actual is not None and expected is not None and str(actual) != str(expected)
 
 
-def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expected: dict) -> dict:
+def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expected: dict, rules: dict | None = None) -> dict:
     if rpr is None:
         return {}
     rs = rpr.find("w:rStyle", NS)
@@ -128,7 +122,7 @@ def character_style_conflicts(target_profile: dict, rpr: ET.Element | None, expe
     style_props = style_run_overrides(target_profile, rsid)
     bad: dict[str, object] = {}
     fonts = style_props.get("fonts") or {}
-    font_bad = comparable_font_conflicts(fonts, expected.get("fonts") or {})
+    font_bad = comparable_font_conflicts(fonts, expected.get("fonts") or {}, rules)
     if font_bad:
         bad["fonts"] = font_bad
     if value_conflict(style_props.get("size_half_points"), expected.get("size_half_points")):
@@ -152,6 +146,7 @@ def direct_emphasis_issues(
     *,
     expected_bold: bool,
     expected_italic: bool,
+    rules: dict | None = None,
 ) -> list[tuple[str, str]]:
     """Return direct bold/italic conflicts for ordinary body text.
 
@@ -160,17 +155,19 @@ def direct_emphasis_issues(
     """
     if rpr is None:
         return []
+    rules = load_rules() if rules is None else rules
     out: list[tuple[str, str]] = []
-    if not expected_bold and (boolprop(rpr, "b") or boolprop(rpr, "bCs")):
+    if (rules["body"]["bold"] == "forbid" or (rules["body"]["bold"] == "template" and not expected_bold)) and (boolprop(rpr, "b") or boolprop(rpr, "bCs")):
         out.append(("body-run-bold-direct-format", "普通正文 run 存在直接加粗，覆盖了正文基准字重。"))
-    if not expected_italic and (boolprop(rpr, "i") or boolprop(rpr, "iCs")):
+    if (rules["body"]["italic"] == "forbid" or (rules["body"]["italic"] == "template" and not expected_italic)) and (boolprop(rpr, "i") or boolprop(rpr, "iCs")):
         out.append(("body-run-italic-direct-format", "普通正文 run 存在直接斜体，覆盖了正文基准字形。"))
     return out
 
 
-def audit(template: Path, target: Path) -> dict:
-    template_profile = extract_profile(template)
-    target_profile = extract_profile(target)
+def audit(template: Path, target: Path, text_rules: Path | dict | None = None) -> dict:
+    rules = load_rules(text_rules)
+    template_profile = load_profile(template)
+    target_profile = load_profile(target)
     roles = template_profile.get("semantic_roles", {})
     body_sid = (roles.get("body") or {}).get("style_id")
     heading_sids = {
@@ -183,7 +180,7 @@ def audit(template: Path, target: Path) -> dict:
     if caption_role.get("style_id"):
         caption_sids.add(caption_role["style_id"])
 
-    expected = style_run_props(template_profile, body_sid)
+    expected = expected_body_props(template_profile, rules)
     expected_fonts = expected.get("fonts") or {}
     expected_size = expected.get("size_half_points")
     expected_size_cs = expected.get("size_cs_half_points") or expected_size
@@ -193,23 +190,9 @@ def audit(template: Path, target: Path) -> dict:
     with zipfile.ZipFile(target) as z:
         root = ET.fromstring(z.read("word/document.xml"))
 
-    table_paras = {
-        id(p)
-        for tbl in root.findall(".//w:tbl", NS)
-        for p in tbl.findall(".//w:p", NS)
-    }
-
     issues = []
-    in_body = False
-    for idx, p in enumerate(root.findall(".//w:p", NS), 1):
+    for idx, p in body_paragraph_items(root, template_profile, target_profile):
         sid = style_id(p)
-        if sid in heading_sids:
-            in_body = True
-            continue
-        if sid == body_sid:
-            in_body = True
-        if not in_body or id(p) in table_paras or sid in caption_sids:
-            continue
 
         text = p_text(p).strip()
         if not text:
@@ -222,6 +205,7 @@ def audit(template: Path, target: Path) -> dict:
             pmark_rpr,
             expected_bold=expected_bold,
             expected_italic=expected_italic,
+            rules=rules,
         ):
             issues.append(
                 {
@@ -239,59 +223,43 @@ def audit(template: Path, target: Path) -> dict:
             if not rt:
                 continue
             rpr = r.find("w:rPr", NS)
-            if rpr is None:
-                continue
-
-            actual_fonts = run_fonts(rpr)
-            font_bad = comparable_font_conflicts(actual_fonts, expected_fonts)
+            actual = effective_run_props(target_profile, sid, rpr)
+            actual_fonts = actual.get("fonts") or {}
+            font_bad = font_conflicts(actual_fonts, expected_fonts, rules, run_font_slots(r))
             if font_bad:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "code": "body-run-font-override",
-                        "paragraph": idx,
-                        "run": run_idx,
-                        "text": rt[:120],
-                        "message": "普通正文局部 run 使用了与正文基准冲突的显式字体。",
-                        "actual": actual_fonts,
-                        "expected": expected_fonts,
-                        "conflicts": font_bad,
-                    }
-                )
-
-            for tag, exp, code in (
-                ("sz", expected_size, "body-run-size-override"),
-                ("szCs", expected_size_cs, "body-run-size-cs-override"),
+                issues.append({
+                    "severity": "error", "code": "body-run-font-override",
+                    "paragraph": idx, "run": run_idx, "text": rt[:120],
+                    "message": "正文实际字体不符合本次文字规则（含样式继承）。",
+                    "actual": actual_fonts, "expected": expected_fonts, "conflicts": font_bad,
+                })
+            for key, exp, code in (
+                ("size_half_points", expected_size, "body-run-size-override"),
+                ("size_cs_half_points", expected_size_cs, "body-run-size-cs-override"),
             ):
-                node = rpr.find(f"w:{tag}", NS)
-                val = node.get(qn("val")) if node is not None else None
-                if value_conflict(val, exp):
-                    issues.append(
-                        {
-                            "severity": "error",
-                            "code": code,
-                            "paragraph": idx,
-                            "run": run_idx,
-                            "text": rt[:120],
-                            "message": "普通正文局部 run 使用了与正文基准冲突的显式字号。",
-                            "actual": val,
-                            "expected": str(exp),
-                        }
-                    )
-
-            char_bad = character_style_conflicts(target_profile, rpr, expected)
-            if char_bad:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "code": "body-run-character-style-font-size-override",
-                        "paragraph": idx,
-                        "run": run_idx,
-                        "text": rt[:120],
-                        "message": "普通正文局部 run 的字符样式覆盖了正文基准字体或字号。",
-                        **char_bad,
-                    }
-                )
+                val = actual.get(key)
+                if key == "size_cs_half_points" and val is None:
+                    val = actual.get("size_half_points")
+                if exp is not None and str(val) != str(exp):
+                    issues.append({
+                        "severity": "error", "code": code, "paragraph": idx,
+                        "run": run_idx, "text": rt[:120],
+                        "message": "正文实际字号不符合本次文字规则。",
+                        "actual": val, "expected": str(exp),
+                    })
+            for key, tags in EMPHASIS.items():
+                mode = rules["body"][key]
+                if mode not in {"forbid", "require"}:
+                    continue
+                wanted = mode == "require"
+                for tag, prop in zip(tags, (key, key + "_cs")):
+                    if bool(actual.get(prop, False)) != wanted:
+                        issues.append({
+                            "severity": "error", "code": f"body-run-{tag}-rule",
+                            "paragraph": idx, "run": run_idx, "text": rt[:120],
+                            "message": f"正文 {tag} 不符合本次 {mode} 规则。",
+                            "actual": bool(actual.get(prop, False)), "expected": wanted,
+                        })
 
             # No coverage threshold: one stray direct-bold/direct-italic run is an
             # error whenever the body baseline itself is not bold/italic.
@@ -299,6 +267,7 @@ def audit(template: Path, target: Path) -> dict:
                 rpr,
                 expected_bold=expected_bold,
                 expected_italic=expected_italic,
+                rules=rules,
             ):
                 issues.append(
                     {
@@ -317,6 +286,8 @@ def audit(template: Path, target: Path) -> dict:
         "status": "passed" if not issues else "failed",
         "body_style_id": body_sid,
         "expected_body_run": expected,
+        "text_rules": rules,
+        "text_rules_sha256": rules_digest(rules),
         "issues": issues,
     }
 
@@ -326,8 +297,12 @@ def main() -> int:
     ap.add_argument("template", type=Path)
     ap.add_argument("target", type=Path)
     ap.add_argument("--json-out", type=Path)
+    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON；不传则沿用默认规则")
     a = ap.parse_args()
-    result = audit(a.template, a.target)
+    try:
+        result = audit(a.template, a.target, a.text_rules)
+    except TextRulesError as exc:
+        result = {"status": "failed", "error": str(exc), "code": "text-rules-invalid"}
     payload = json.dumps(result, ensure_ascii=False, indent=2)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)

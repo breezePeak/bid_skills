@@ -10,7 +10,11 @@
 
 ## 正文/标题
 
-优先恢复正确的模板 style，再清除覆盖样式的错误 direct formatting。不要重新创建整段文字。
+优先恢复正确的模板 style，再清除覆盖样式的错误 direct formatting。不要重新创建整段文字。正文允许保留的字体和强调格式由本次文字规则决定，应用模板或清除其他属性时不得连带破坏。初检、修复和复查统一传入 `--text-rules`；未提及的检查项不变。
+
+## 自动编号
+
+使用 `numbering_repair.py` 转换已识别的手工标题、题注与脚注，保留编号格式和引用关系。脚注不得用页脚文字或普通上标冒充。无法唯一确认的位置由 Agent 核对后通过 `--numbering-plan` 指定；修复后重新运行 `numbering_audit.py`，更新域并渲染。详见 `numbering-rules.md`。
 
 ## 表格
 

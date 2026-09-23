@@ -24,6 +24,7 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 
 | scope | 本轮允许变化 | 必须保持不变 |
 |---|---|---|
+| `automatic-numbering` | 已确认的标题/题注/脚注编号、编号定义和域，以及必要脚注内容迁移与关系注册 | 表格结构与几何、图片/Shape、媒体、页面/分节；非目标文字由最小范围替换和内容复核保护 |
 | `text-style` | 普通正文/标题 run、paragraph 样式 | 可见文字内容、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `text-content` | 明确命中的字符内容 | run/p 样式、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `table-text-style` | 表格单元格内 run/p 样式 | 可见文字内容、表格结构与几何、表外文字样式、图片/Shape、媒体、关系、页面/分节 |
@@ -33,6 +34,8 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 | `page-layout` | section/page 属性 | 可见文字内容、文字样式、表格结构与几何、图片/Shape、媒体、关系 |
 
 禁止 `scope=all`。
+
+`automatic-numbering` 必须独立执行。`numbering_repair.py` 内部已比较本范围冻结项；仍须通过 `numbering_audit.py` 和最新页面复查。此范围允许必要的域/脚注结构变化，不允许重写业务内容；不能把单纯的范围检查通过当作内容与编号均正确。
 
 ## 3. 表格语义结构始终受保护
 

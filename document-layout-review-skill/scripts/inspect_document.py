@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse, json, subprocess, sys
 from pathlib import Path
+from text_rules import load_rules, load_profile, expected_body_props, write_rules, rules_digest
 
 HERE = Path(__file__).resolve().parent
 BUNDLE = HERE.parent
@@ -33,6 +34,7 @@ def main():
     ap.add_argument("--work-dir", type=Path, required=True)
     ap.add_argument("--template", type=Path)
     ap.add_argument("--template-style-json", type=Path)
+    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON")
     args = ap.parse_args()
 
     if not args.input.is_file():
@@ -69,11 +71,29 @@ def main():
             return 2
         style_json = profile
 
+    try:
+        rules = load_rules(args.text_rules)
+        expected_body_props(load_profile(template), rules)
+        rules_file = reports / "text-rules.effective.json"
+        write_rules(rules_file, rules)
+        rules_hash = rules_digest(rules)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
+        return 2
+
     checks = []
 
     p = reports / "docx-audit.json"
     rr = run_script("docx_audit.py", args.input, "--json-out", p)
     checks.append({"name": "结构与版式", "report": str(p), "run": rr, "result": load_json(p)})
+
+    p = reports / "automatic-numbering.json"
+    rr = run_script("numbering_audit.py", args.input, "--json-out", p)
+    data = load_json(p)
+    if rr.get("returncode") not in (0, 2) or not isinstance(data, dict) or data.get("status") not in {"passed", "failed"}:
+        print(json.dumps({"status": "failed", "error": "自动编号检查执行失败，不能跳过", "run": rr}, ensure_ascii=False))
+        return 2
+    checks.append({"name": "标题/题注/脚注自动编号", "report": str(p), "run": rr, "result": data})
 
     p = reports / "table-layout.json"
     rr = run_script("table_layout_audit.py", args.input, "--json-out", p)
@@ -89,7 +109,11 @@ def main():
 
     if template and template.is_file():
         p = reports / "template-usage.json"
-        rr = run_script("template_usage_audit.py", template, args.input, "--json-out", p)
+        rr = run_script("template_usage_audit.py", template, args.input, "--json-out", p, "--text-rules", rules_file)
+        data = load_json(p) or {}
+        if not rr["ok"] or data.get("text_rules_sha256") != rules_hash:
+            print(json.dumps({"status": "failed", "error": "文字检查未使用本次规则或执行失败", "run": rr}, ensure_ascii=False))
+            return 2
         checks.append({"name": "模板实际使用", "report": str(p), "run": rr, "result": load_json(p)})
 
         p = reports / "template-conformance.json"
@@ -122,6 +146,8 @@ def main():
         "input": str(args.input),
         "template": str(template) if template else None,
         "template_style_json": str(style_json) if style_json else None,
+        "text_rules": str(rules_file),
+        "text_rules_sha256": rules_hash,
         "issue_count": issue_count,
         "hard_error_count": hard_error_count,
         "semantic_review_count": review_count,

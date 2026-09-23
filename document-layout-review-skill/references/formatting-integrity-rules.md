@@ -1,20 +1,17 @@
 # Formatting integrity rules
 
-## Purpose
-
-A template is not satisfied merely because `styles.xml` still contains the original styles. The generated document must actually use those styles without direct-format overrides that change the visible result.
-
 ## Required checks
 
 For ordinary body paragraphs:
 
+Read the per-task JSON through `--text-rules`; see `text-rules.md`. Defaults preserve existing `黑体` / `SimHei` fonts, but an explicit user ban or replacement font takes precedence. These rules apply only to ordinary body text, not headings, tables or captions.
+
 - use the template's mapped body paragraph style;
-- do not apply bold to most or all of a paragraph unless that emphasis is intentional content;
-- do not apply italic to most or all of a paragraph unless intentional;
-- do not override the template body font or size;
-- **font and size are checked per visible run, not by paragraph coverage**: a one-word or one-sentence font/size override that conflicts with the body baseline is still an error;
-- character styles that change the ordinary body font/size are also treated as font/size overrides;
-- preserve short local emphasis only for semantic emphasis such as bold/italic; “short local span” is not a justification for keeping a conflicting font or size.
+- check bold and italic against the active task rules; default `template` mode rejects conflicting direct emphasis while preserving permitted character-style emphasis;
+- apply explicit per-task font/size overrides before falling back to the template; only preserve fonts allowed by the active rules;
+- **font and size are checked per visible run, not by paragraph coverage**: any non-exempt font or size conflict is still an error even in a short span;
+- character styles that introduce non-exempt font/size conflicts are also treated as font/size overrides;
+- preserve emphasis only when permitted by the active rules; “short local span” is not a justification for keeping a conflicting font or size.
 
 For tables:
 
@@ -28,15 +25,15 @@ For tables:
 Audit:
 
 ```bash
-python3 scripts/template_usage_audit.py <template.docx> <output.docx>
+python3 scripts/template_usage_audit.py <template.docx> <output.docx> --text-rules <text-rules.json>
 ```
 
-The audit is a release gate. Any run-level font/size conflict in ordinary body text must fail the gate.
+The audit is a release gate. Any non-exempt run-level font or size conflict in ordinary body text must fail the gate.
 
-Repair of body formatting drift (run-level font/size conflicts are fixed even when local; bold/italic remains conservative):
+Repair using the same rules:
 
 ```bash
-python3 scripts/template_usage_repair.py <template.docx> <input.docx> --out <repaired.docx>
+python3 scripts/template_usage_repair.py <template.docx> <input.docx> --out <repaired.docx> --text-rules <text-rules.json>
 ```
 
-Do not clear all direct formatting globally. A short bold phrase, inline formula, code span, or deliberate emphasis may be legitimate. Font/size, however, must still match the paragraph's semantic baseline unless a separately recognized semantic object explicitly requires another style.
+Do not clear all direct formatting globally. A short bold phrase, inline formula, code span, or deliberate emphasis may be legitimate. Font/size and emphasis must match the active rules. Report unsupported or conflicting requirements rather than silently falling back to defaults.
