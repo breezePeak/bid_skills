@@ -1,255 +1,230 @@
 #!/usr/bin/env python3
-"""对已完成第一轮检查的 DOCX 执行确定性修复并产出待视觉验收 candidate.docx。"""
+"""Repair -> real field update -> deterministic checks -> current-page review.
+
+An audit-only continuation validates a manually repaired/refreshed candidate; it
+never reruns broad repairs that could undo a reviewed diagram or pagination.
+"""
 from __future__ import annotations
-import argparse, hashlib, json, shutil, subprocess, sys
+import argparse
+import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
-from text_rules import load_rules, load_profile, expected_body_props, write_rules, rules_digest
+from numbering_policy import Doc, PolicyError, file_digest, inventory, public_inventory
+from figure_review import make_review_template, validate_initial
+from field_refresh import refresh, validate_report
 
-HERE = Path(__file__).resolve().parent
-BUNDLE = HERE.parent
-DEFAULT_TEMPLATE = BUNDLE / "assets" / "default-template.docx"
-DEFAULT_STYLE_JSON = BUNDLE / "assets" / "default-template-style.json"
+HERE=Path(__file__).resolve().parent
+BUNDLE=HERE.parent
+DEFAULT_TEMPLATE=BUNDLE/'assets'/'default-template.docx'
+DEFAULT_STYLE_JSON=BUNDLE/'assets'/'default-template-style.json'
+REQUIRED_GATES={'numbering','caption-policy','punctuation','hard-text','structure',
+                'template-text','template-structure','table-layout','image-inventory','field-update'}
 
-def run(cmd, allow=(0,)):
-    cp = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    return {"ok": cp.returncode in allow, "returncode": cp.returncode, "stdout": cp.stdout, "stderr": cp.stderr}
 
-def run_script(name, *args, allow=(0,)):
-    return run([sys.executable, str(HERE / name), *map(str, args)], allow=allow)
+def write_json(path,data):
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 
-def load_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
 
-def sha256(path: Path):
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return "sha256:" + h.hexdigest()
+def load_json(path):
+    try:return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    except (OSError,ValueError,TypeError):return None
 
-def resolve_template(args, reports: Path):
-    if args.template is None:
-        return DEFAULT_TEMPLATE, DEFAULT_STYLE_JSON
-    if not args.template.is_file():
-        raise FileNotFoundError("template not found")
+
+def run_script(name,*args,allow=(0,)):
+    cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False)
+    return {'ok':cp.returncode in allow,'returncode':cp.returncode,'stdout':cp.stdout,'stderr':cp.stderr}
+
+
+def resolve_template(args,reports):
+    if args.template is None:return DEFAULT_TEMPLATE,DEFAULT_STYLE_JSON
+    if not args.template.is_file():raise PolicyError('template-missing','找不到本次模板。')
     if args.template_style_json is not None:
-        if not args.template_style_json.is_file():
-            raise FileNotFoundError("template style json not found")
-        return args.template, args.template_style_json
+        if not args.template_style_json.is_file():raise PolicyError('template-profile-missing','找不到模板样式约定。')
+        return args.template,args.template_style_json
+    choice=reports/'template-choice-request.json'
+    r=run_script('template_conflict_detector.py',args.template,'--json-out',choice,allow=(0,4))
+    data=load_json(choice)
+    if data and data.get('status')=='requires_user_choice':raise PolicyError('template-conflict','用户模板存在冲突，须先确定采用哪个约定。',choice_request=str(choice))
+    if not r['ok']:raise PolicyError('template-inspection-failed','模板检查失败。',run=r)
+    profile=reports/'uploaded-template.style-profile.json'
+    r=run_script('template_style_profile.py',args.template,'--out',profile)
+    if not r['ok'] or not profile.is_file():raise PolicyError('template-inspection-failed','无法解析用户模板样式。')
+    return args.template,profile
 
-    conflict = reports / "template-choice-request.json"
-    r = run_script("template_conflict_detector.py", args.template, "--json-out", conflict, allow=(0, 4))
-    data = load_json(conflict)
-    if data and data.get("status") == "requires_user_choice":
-        print(json.dumps({
-            "status": "requires_user_choice",
-            "choice_request": str(conflict),
-            "conflicts": data.get("conflicts", []),
-        }, ensure_ascii=False, indent=2))
-        raise SystemExit(4)
 
-    profile = reports / "uploaded-template.style-profile.json"
-    r = run_script("template_style_profile.py", args.template, "--out", profile)
-    if not r["ok"] or not profile.is_file():
-        raise RuntimeError("无法解析用户模板样式")
-    return args.template, profile
+def preserved_decisions(original,current,decisions):
+    """Bind already-applied title/exemption decisions across deterministic stages.
+
+    Figure identity and object counts must survive. Normal text cleanup may change
+    a table text hash. Explicit paragraph locators are one-use and are not replayed.
+    """
+    old=inventory(Doc(original));new=inventory(Doc(current))
+    if [o['kind'] for o in old]!=[o['kind'] for o in new]:raise PolicyError('object-inventory-changed','图表对象列表变了，不能复用旧语义决定。')
+    for a,b in zip(old,new):
+        if a['kind']=='figure' and a['hash']!=b['hash']:raise PolicyError('image-changed-by-batch-repair','文字/表格步骤擅自改变了图片。',object_id=a['id'])
+    mapping={o['id']:o for o in new};rows=[]
+    for row in decisions:
+        if row.get('exempt'):
+            rows.append({'id':row['id'],'object_sha256':mapping[row['id']]['hash'],'exempt':True,'reason':row['reason']})
+    return {'version':1,'source_sha256':file_digest(current),'objects':rows}
+
+
+def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report):
+    gates=[]
+    def gate(ident,script,args,predicate):
+        report=reports/('gate-'+ident+'.json')
+        r=run_script(script,*args,'--json-out',report,allow=(0,2,3,4))
+        data=load_json(report)
+        ok=bool(r['returncode']==0 and data is not None and predicate(data))
+        gates.append({'id':ident,'passed':ok,'report':str(report),'report_sha256':file_digest(report) if report.is_file() else None,'result':data,'run':r})
+    extra=['--object-plan',object_plan] if object_plan else []
+    gate('numbering','numbering_audit.py',[candidate,'--template',template,'--template-style-json',style_json,*extra],lambda d:d.get('status')=='passed')
+    gate('caption-policy','numbering_policy.py',['audit',candidate,'--template',template,'--template-style-json',style_json,*extra],lambda d:d.get('status')=='passed')
+    gate('punctuation','contextual_punctuation.py',[candidate],lambda d:d.get('issue_count',0)==0)
+    gate('hard-text','hard_text_audit.py',[candidate],lambda d:d.get('status')=='passed')
+    gate('structure','docx_audit.py',[candidate],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
+    gate('template-text','template_usage_audit.py',[template,candidate,'--text-rules',rules_file],lambda d:d.get('status')=='passed' and d.get('text_rules_sha256')==rules_hash)
+    gate('template-structure','template_conformance.py',[template,candidate],lambda d:d.get('status')=='passed' or not d.get('errors'))
+    gate('table-layout','table_layout_audit.py',[candidate,'--template-style-json',style_json],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
+    rows=validate_initial(source,initial)
+    actual=[o for o in inventory(Doc(candidate)) if o['kind']=='figure']
+    data={'status':'passed' if {o['id'] for o in actual}==set(rows) else 'failed','objects':public_inventory(Doc(candidate)),'final_visual_review_required':bool(actual)}
+    report=reports/'gate-image-inventory.json';write_json(report,data)
+    gates.append({'id':'image-inventory','passed':data['status']=='passed','report':str(report),'report_sha256':file_digest(report),'result':data})
+    try:data=validate_report(candidate,field_report);ok=True
+    except PolicyError as exc:data={'status':'failed','issues':[exc.as_issue()]};ok=False
+    report=reports/'gate-field-update.json';write_json(report,data)
+    gates.append({'id':'field-update','passed':ok,'report':str(report),'report_sha256':file_digest(report),'result':data})
+    return gates
+
 
 def main():
-    ap = argparse.ArgumentParser(description="Word 排版确定性修复流程")
-    ap.add_argument("input", type=Path)
-    ap.add_argument("--work-dir", type=Path, required=True)
-    ap.add_argument("--template", type=Path)
-    ap.add_argument("--template-style-json", type=Path)
-    ap.add_argument("--text-rules", type=Path, help="本次文字规则 JSON")
-    ap.add_argument("--numbering-plan", type=Path, help="可选：Agent 确认的手工编号/脚注定位映射")
-    args = ap.parse_args()
-
-    if not args.input.is_file():
-        ap.error("input not found")
-
-    args.work_dir.mkdir(parents=True, exist_ok=True)
-    reports = args.work_dir / "reports"
-    render_dir = args.work_dir / "render"
-    reports.mkdir(exist_ok=True)
-    render_dir.mkdir(exist_ok=True)
-
+    ap=argparse.ArgumentParser(description='按模板修复并执行不可缺项的图表/字段验收流程')
+    ap.add_argument('input',type=Path);ap.add_argument('--work-dir',type=Path,required=True)
+    ap.add_argument('--template',type=Path);ap.add_argument('--template-style-json',type=Path)
+    ap.add_argument('--text-rules',type=Path);ap.add_argument('--numbering-plan',type=Path);ap.add_argument('--object-plan',type=Path)
+    ap.add_argument('--initial-visual-review',type=Path)
+    ap.add_argument('--audit-only',action='store_true');ap.add_argument('--source',type=Path,help='audit-only 时必须指向原始 Word，而不是修改后的候选')
+    ap.add_argument('--field-engine',choices=['word','libreoffice'],default='word')
+    ap.add_argument('--field-update-report',type=Path,help='audit-only 时已更新域候选的引擎报告')
+    args=ap.parse_args()
+    for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','source','field_update_report'):
+        val=getattr(args,key)
+        if val is not None:setattr(args,key,val.resolve())
+    args.work_dir.mkdir(parents=True,exist_ok=True)
+    reports=args.work_dir/'reports';reports.mkdir(exist_ok=True);render_dir=args.work_dir/'render'
+    stages=[];source=args.source if args.audit_only else args.input
     try:
-        template, style_json = resolve_template(args, reports)
-        rules = load_rules(args.text_rules)
-        expected_body_props(load_profile(template), rules)
-        rules_file = reports / "text-rules.effective.json"
-        write_rules(rules_file, rules)
-        rules_hash = rules_digest(rules)
-        rule_args = ["--text-rules", rules_file]
-    except SystemExit:
-        raise
-    except Exception as e:
-        print(json.dumps({"status": "failed", "error": str(e)}, ensure_ascii=False, indent=2))
-        return 2
+        if source is None or not source.is_file() or not args.input.is_file():raise PolicyError('input-missing','输入和原始 Word 必须存在。')
+        reserved=['candidate.docx','candidate-refreshed.docx','00-numbering.docx','01-punctuation.docx','02-whitespace.docx','03-template-style.docx','04-template-usage.docx','05-tables.docx','06-layout.docx','07-final-numbering.docx']
+        if not args.audit_only and any((args.work_dir/name).resolve() in {args.input.resolve(),source.resolve()} for name in reserved):
+            raise PolicyError('input-output-collision','工作目录中的阶段输出与输入重名；请选择新的工作目录，不能覆盖原文。')
 
-    current = args.input
-    stages = []
+        # A hash-bound initial inventory forces image inspection before mutation.
+        initial=args.initial_visual_review
+        if initial is None:
+            prepared=make_review_template(source,args.work_dir/'source-images')
+            initial=reports/'initial-visual-review.json';write_json(initial,prepared)
+            if prepared['objects']:
+                write_json(reports/'object-inventory.json',{'version':1,'source_sha256':file_digest(source),'objects':public_inventory(Doc(source))})
+                result={'status':'requires_image_review','review':str(initial),'inventory':str(reports/'object-inventory.json'),'message':'Agent 先逐张查看真实原图、填写初检和缺题注语义计划，再继续；不是让用户手填。'}
+                print(json.dumps(result,ensure_ascii=False,indent=2));return 4
+        validate_initial(source,initial)
+        template,style_json=resolve_template(args,reports)
+        from text_rules import load_rules,load_profile,expected_body_props,write_rules,rules_digest
+        rules=load_rules(args.text_rules);expected_body_props(load_profile(template),rules)
+        rules_file=reports/'text-rules.effective.json';write_rules(rules_file,rules);rules_hash=rules_digest(rules)
+        current=args.input;object_plan=args.object_plan
+        def stage(ident,script,build):
+            nonlocal current
+            out=args.work_dir/(ident+'.docx');report=reports/(ident+'.json')
+            if out.resolve()==current.resolve():raise PolicyError('stage-output-collision','阶段输出不能覆盖阶段输入。')
+            from layout_invariant_guard import snapshot_docx,changed_invariants
+            scope={'contextual_punctuation.py':'text-content','whitespace_repair.py':'text-content','template_style_enforce.py':'text-style','template_usage_repair.py':'text-style','docx_layout_policy.py':'table-layout'}.get(script)
+            before=snapshot_docx(current) if scope else None
+            r=run_script(script,*build(current,out,report));data=load_json(report)
+            stages.append({'name':ident,'run':r,'report':str(report)})
+            if not r['ok'] or not out.is_file():raise PolicyError('repair-stage-failed','确定性修复阶段失败。',stage=ident,result=data,run=r)
+            if script in {'template_style_enforce.py','template_usage_repair.py'} and (data or {}).get('text_rules_sha256')!=rules_hash:
+                raise PolicyError('text-rules-not-used','修复未使用本次文字规则。')
+            if scope:
+                damaged=changed_invariants(before,snapshot_docx(out),scope)
+                stages[-1]['scope_guard']={'scope':scope,'passed':not damaged,'changed':damaged}
+                if damaged:
+                    out.unlink(missing_ok=True)
+                    raise PolicyError('repair-scope-failed','本轮修复顺带改变了非目标对象；候选已撤销，须用更小范围修复。',stage=ident,invariants=damaged)
+            current=out;return data or {}
+        if not args.audit_only:
+            numbering_args=['--numbering-plan',args.numbering_plan] if args.numbering_plan else []
+            object_args=['--object-plan',object_plan] if object_plan else []
+            first=stage('00-numbering','numbering_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r,'--template',template,'--template-style-json',style_json,*numbering_args,*object_args])
+            numbered=current
+            stage('01-punctuation','contextual_punctuation.py',lambda c,o,r:[c,'--out',o,'--json-out',r])
+            stage('02-whitespace','whitespace_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r])
+            stage('03-template-style','template_style_enforce.py',lambda c,o,r:[template,style_json,c,'--out',o,'--json-out',r,'--text-rules',rules_file])
+            stage('04-template-usage','template_usage_repair.py',lambda c,o,r:[template,c,'--out',o,'--json-out',r,'--text-rules',rules_file])
+            stage('05-tables','table_layout_repair.py',lambda c,o,r:[c,'--output',o,'--json-out',r,'--template',template])
+            stage('06-layout','docx_layout_policy.py',lambda c,o,r:[c,'--output',o,'--json-out',r])
+            rebound=preserved_decisions(numbered,current,first.get('object_decisions',[]))
+            object_plan=reports/'object-decisions.effective.json';write_json(object_plan,rebound)
+            # The legacy template step must not reintroduce a source-derived list
+            # or undo caption placement. Reapply the SAME template policy last.
+            stage('07-final-numbering','numbering_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r,'--template',template,'--template-style-json',style_json,'--object-plan',object_plan])
+        candidate=args.work_dir/'candidate.docx'
+        if current.resolve()!=candidate.resolve():shutil.copy2(current,candidate)
+        # In audit-only mode candidate bytes must already be the refreshed bytes.
+        if args.audit_only:
+            if args.field_update_report is None:raise PolicyError('field-update-report-missing','继续验收前必须实际更新最后修改后的 Word。')
+            field_data=validate_report(candidate,args.field_update_report)
+        else:
+            refreshed=args.work_dir/'candidate-refreshed.docx'
+            try:
+                field_data=refresh(candidate,refreshed,args.field_engine)
+                shutil.copy2(refreshed,candidate)
+            except PolicyError as exc:
+                result={'status':'requires_field_update','candidate':str(candidate),'candidate_sha256':file_digest(candidate),'issues':[exc.as_issue()],
+                        'next':'使用真实 Word 更新域，或在具备 Word 的宿主执行 field_refresh.py；随后 --audit-only 检查，不能将此候选当已验收成果。'}
+                write_json(args.work_dir/'review-manifest.json',result)
+                print(json.dumps(result,ensure_ascii=False,indent=2));return 4
+        field_report=reports/'field-update.json';write_json(field_report,field_data)
+        gates=check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report)
+        render_run=run_script('render_docx.py',candidate,'--out-dir',render_dir)
+        try:render_data=json.loads(render_run['stdout']) if render_run['ok'] else {}
+        except ValueError:render_data={}
+        pages=[{'path':str(Path(p).resolve()),'name':Path(p).name,'sha256':file_digest(Path(p))} for p in render_data.get('pages',[]) if Path(p).is_file()]
+        ok=all(g['passed'] for g in gates) and bool(render_run['ok'] and pages)
+        manifest={'version':4,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
+                  'candidate':str(candidate.resolve()),'candidate_sha256':file_digest(candidate),'template':str(template.resolve()),'template_sha256':file_digest(template),
+                  'template_style_json':str(style_json.resolve()),'template_style_sha256':file_digest(style_json),
+                  'text_rules':str(rules_file.resolve()),'text_rules_sha256':rules_hash,'object_plan':str(object_plan.resolve()) if object_plan else None,
+                  'initial_visual_review':str(initial.resolve()),'initial_visual_review_sha256':file_digest(initial),'stages':stages,'gates':gates,
+                  'render':{'passed':bool(render_run['ok'] and pages),'run':render_run,'data':render_data,'pages':pages},
+                  'next':'Agent 逐张对照原图/新图并逐页终检。初检出框、重叠、内嵌题注等缺陷必须关闭；只改报告不能放行。最后使用 finalize_review.py。'}
+        write_json(args.work_dir/'review-manifest.json',manifest)
+        final_template={'overall_status':'pending','candidate_sha256':file_digest(candidate),'pages':[{'name':p['name'],'sha256':p['sha256'],'status':'pending','observations':''} for p in pages],
+                        'figures':{'version':1,'source_sha256':file_digest(source),'candidate_sha256':file_digest(candidate),'objects':[]},'table_reviews':[]}
+        initial_rows=validate_initial(source,initial)
+        for obj in inventory(Doc(candidate)):
+            if obj['kind']!='figure':continue
+            old=initial_rows.get(obj['id'],{})
+            final_template['figures']['objects'].append({'id':obj['id'],'object_sha256':obj['hash'],'source_object_sha256':old.get('object_sha256'),
+                'image_type':old.get('image_type'),'observation':'','checks':{key:'pending' for key in old.get('checks',{})},
+                'style_and_semantics_preserved':False,'resolved_initial_defects':[],'repair_note':'','pages':[]})
+        # Issue IDs are generated, not invented by the model.
+        table_result=next(g.get('result') or {} for g in gates if g['id']=='table-layout')
+        from numbering_policy import digest
+        for issue in table_result.get('issues',[]):
+            if issue.get('severity')=='review':
+                final_template['table_reviews'].append({'issue_sha256':digest(json.dumps(issue,ensure_ascii=False,sort_keys=True).encode()),'decision':'pending','reason':''})
+        write_json(reports/'final-visual-review.template.json',final_template)
+        print(json.dumps({'status':manifest['status'],'candidate':str(candidate),'manifest':str(args.work_dir/'review-manifest.json'),'visual_review_template':str(reports/'final-visual-review.template.json'),'failed_gates':[g['id'] for g in gates if not g['passed']]},ensure_ascii=False,indent=2))
+        return 0 if ok else 2
+    except Exception as exc:
+        result={'status':'failed','issues':[exc.as_issue() if isinstance(exc,PolicyError) else {'severity':'error','code':'review-pipeline-error','message':str(exc)}],'stages':stages}
+        write_json(reports/'pipeline-failure.json',result);print(json.dumps(result,ensure_ascii=False,indent=2));return 2
 
-    def run_stage(name: str, script: str, cmd_args, out: Path, report: Path):
-        r = run_script(script, *cmd_args)
-        stages.append({"name": name, "run": r, "report": str(report)})
-        if script in {"template_style_enforce.py", "template_usage_repair.py"}:
-            data = load_json(report) or {}
-            if data.get("text_rules_sha256") != rules_hash:
-                raise RuntimeError(f"{name}未使用本次文字规则，停止后续修复")
-        if not r["ok"] or not out.is_file():
-            raise RuntimeError(f"{name}失败")
-        return out
 
-    try:
-        # Run before character/style changes so optional semantic anchors stay valid.
-        out = args.work_dir / "00-automatic-numbering.docx"
-        report = reports / "00-automatic-numbering.json"
-        numbering_args = ["--numbering-plan", args.numbering_plan] if args.numbering_plan else []
-        current = run_stage(
-            "标题/题注/脚注自动编号修复",
-            "numbering_repair.py",
-            [current, "--out", out, "--json-out", report, *numbering_args],
-            out, report,
-        )
-
-        out = args.work_dir / "01-punctuation.docx"
-        report = reports / "01-punctuation.json"
-        current = run_stage(
-            "标点修复",
-            "contextual_punctuation.py",
-            [current, "--out", out, "--json-out", report],
-            out, report,
-        )
-
-        out = args.work_dir / "02-whitespace.docx"
-        report = reports / "02-whitespace.json"
-        current = run_stage(
-            "空格修复",
-            "whitespace_repair.py",
-            [current, "--out", out, "--json-out", report],
-            out, report,
-        )
-
-        out = args.work_dir / "03-template-style.docx"
-        report = reports / "03-template-style.json"
-        current = run_stage(
-            "模板样式应用",
-            "template_style_enforce.py",
-            [template, style_json, current, "--out", out, "--json-out", report, *rule_args],
-            out, report,
-        )
-
-        out = args.work_dir / "04-template-usage.docx"
-        report = reports / "04-template-usage.json"
-        current = run_stage(
-            "直接格式污染修复",
-            "template_usage_repair.py",
-            [template, current, "--out", out, "--json-out", report, *rule_args],
-            out, report,
-        )
-
-        out = args.work_dir / "05-tables.docx"
-        report = reports / "05-tables.json"
-        current = run_stage(
-            "表格排版修复",
-            "table_layout_repair.py",
-            [current, "--output", out, "--json-out", report, "--template", template],
-            out, report,
-        )
-
-        out = args.work_dir / "06-layout.docx"
-        report = reports / "06-layout.json"
-        current = run_stage(
-            "通用布局策略修复",
-            "docx_layout_policy.py",
-            [current, "--output", out, "--json-out", report],
-            out, report,
-        )
-    except Exception as e:
-        print(json.dumps({"status": "failed", "error": str(e), "stages": stages}, ensure_ascii=False, indent=2))
-        return 2
-
-    candidate = args.work_dir / "candidate.docx"
-    shutil.copy2(current, candidate)
-
-    gates = []
-    def gate(name, script, report_name, script_args, passed):
-        report = reports / report_name
-        r = run_script(script, *script_args(report), allow=(0, 2, 3, 4))
-        data = load_json(report)
-        ok = bool(r["ok"] and passed(data))
-        if script == "template_usage_audit.py":
-            ok = ok and bool(data and data.get("text_rules_sha256") == rules_hash)
-        if script == "numbering_audit.py":
-            ok = ok and r["returncode"] == 0
-        gates.append({"name": name, "passed": ok, "report": str(report), "result": data, "run": r})
-
-    gate("标题/题注/脚注自动编号", "numbering_audit.py", "gate-automatic-numbering.json",
-         lambda report: [candidate, "--json-out", report],
-         lambda d: d is not None and d.get("status") == "passed")
-    gate("标点", "contextual_punctuation.py", "gate-punctuation.json",
-         lambda report: [candidate, "--json-out", report],
-         lambda d: d is not None and d.get("issue_count", 0) == 0)
-    gate("字符级文本", "hard_text_audit.py", "gate-hard-text.json",
-         lambda report: [candidate, "--json-out", report],
-         lambda d: d is not None and d.get("status") == "passed")
-    gate("结构与版式", "docx_audit.py", "gate-docx-audit.json",
-         lambda report: [candidate, "--json-out", report],
-         lambda d: d is not None and not any(i.get("severity") == "error" for i in d.get("issues", [])))
-    gate("模板实际使用", "template_usage_audit.py", "gate-template-usage.json",
-         lambda report: [template, candidate, "--json-out", report, *rule_args],
-         lambda d: d is not None and d.get("status") == "passed")
-    gate("模板结构一致性", "template_conformance.py", "gate-template-conformance.json",
-         lambda report: [template, candidate, "--json-out", report],
-         lambda d: d is not None and (d.get("status") == "passed" or not d.get("errors")))
-
-    render_run = run_script("render_docx.py", candidate, "--out-dir", render_dir, allow=(0,))
-    render_data = None
-    if render_run["ok"]:
-        try:
-            render_data = json.loads(render_run["stdout"])
-        except Exception:
-            render_data = None
-
-    pages = []
-    for pstr in (render_data or {}).get("pages", []):
-        p = Path(pstr)
-        if p.is_file():
-            pages.append({"path": str(p), "name": p.name, "sha256": sha256(p)})
-
-    structural_pass = all(g["passed"] for g in gates)
-    render_pass = bool(render_run["ok"] and pages)
-    status = "awaiting_visual_review" if structural_pass and render_pass else "failed"
-
-    manifest = {
-        "version": 3,
-        "input": str(args.input),
-        "template": str(template),
-        "template_style_json": str(style_json),
-        "text_rules": str(rules_file),
-        "text_rules_sha256": rules_hash,
-        "candidate": str(candidate),
-        "candidate_sha256": sha256(candidate),
-        "status": status,
-        "stages": stages,
-        "gates": gates,
-        "render": {"passed": render_pass, "run": render_run, "data": render_data, "pages": pages},
-        "next": "Agent 必须对最新渲染页面执行视觉验收；发现问题则回到对应修复步骤，修改后重新运行本流程。",
-    }
-    manifest_path = args.work_dir / "review-manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({
-        "status": status,
-        "candidate": str(candidate),
-        "manifest": str(manifest_path),
-        "page_count": len(pages),
-        "failed_gates": [g["name"] for g in gates if not g["passed"]],
-    }, ensure_ascii=False, indent=2))
-    return 0 if status == "awaiting_visual_review" else 2
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__=='__main__':raise SystemExit(main())
