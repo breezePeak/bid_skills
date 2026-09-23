@@ -4,7 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from numbering_policy import audit_document, PolicyError
+from numbering_policy import PolicyError
+from template_caption_policy import audit_document
 
 
 def audit(source, template=None, style_json=None, object_plan=None):

@@ -7,7 +7,8 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from numbering_policy import PolicyError, file_digest, digest, audit_document
+from numbering_policy import PolicyError, file_digest, digest
+from template_caption_policy import audit_document
 from figure_review import validate_final
 from field_refresh import validate_report
 from review_pipeline import REQUIRED_GATES
@@ -32,7 +33,7 @@ def review_findings(value):
 def validate_release(manifest, visual):
     m=read(manifest) if not isinstance(manifest,dict) else manifest
     v=read(visual) if not isinstance(visual,dict) else visual
-    if m.get('version')!=4 or m.get('status')!='awaiting_visual_review':
+    if m.get('version')!=5 or m.get('status')!='awaiting_visual_review':
         raise PolicyError('manifest-not-ready','必须使用新版完整验收流水线，不能用中间状态或旧清单交付。')
     candidate=Path(m['candidate']);source=Path(m['source'])
     if not candidate.is_file() or file_digest(candidate)!=m.get('candidate_sha256'):
@@ -51,8 +52,11 @@ def validate_release(manifest, visual):
         if not report.is_file() or file_digest(report)!=gate.get('report_sha256'):
             raise PolicyError('gate-report-stale','审计报告缺失或被修改。',gate=gate['id'])
         gate_map[gate['id']]=read(report)
-    validate_report(candidate,gate_map['field-update'])
-    for path_key,hash_key in [('template','template_sha256'),('template_style_json','template_style_sha256'),('initial_visual_review','initial_visual_review_sha256')]:
+    validated_field=validate_report(candidate,gate_map['field-update'])
+    required={'word':'Microsoft Word','libreoffice':'LibreOffice UNO'}.get(m.get('field_engine_requested','auto'))
+    if required and validated_field.get('engine')!=required:
+        raise PolicyError('field-engine-mismatch','实际域更新引擎与明确要求不一致。',expected=required,actual=validated_field.get('engine'))
+    for path_key,hash_key in [('template','template_sha256'),('template_style_json','template_style_sha256'),('initial_visual_review','initial_visual_review_sha256'),('content_plan','content_plan_sha256'),('text_rules','text_rules_file_sha256'),('runtime_preflight','runtime_preflight_sha256')]:
         path=Path(m[path_key])
         if not path.is_file() or file_digest(path)!=m.get(hash_key):raise PolicyError('baseline-stale','模板或初检基准发生变化。',path=str(path))
     render=m.get('render') or {};pages=render.get('pages') or []
@@ -73,6 +77,17 @@ def validate_release(manifest, visual):
     from template_table_style import audit as audit_table_template
     table_checked=audit_table_template(candidate,Path(m['template']),Path(m['template_style_json']))
     if table_checked['status']!='passed':raise PolicyError('final-table-template-failed','交付前表格外观不符合模板。',issues=table_checked['issues'])
+    from content_integrity import audit as audit_content
+    from template_format_contract import audit_extra_formats
+    from template_layout_contract import audit as audit_table_layout
+    rechecks = {
+        'content-integrity': audit_content(source,candidate,m['content_plan']),
+        'template-effective-format': audit_extra_formats(Path(m['template']),candidate,Path(m['template_style_json'])),
+        'table-layout-template': audit_table_layout(Path(m['template']),candidate,Path(m['template_style_json'])),
+    }
+    for name,result in rechecks.items():
+        if result.get('status')!='passed':
+            raise PolicyError('final-'+name+'-failed','交付前当前文档重新核验未通过。',gate=name,issues=result.get('issues',[]))
     image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages)
     outstanding=review_findings(gate_map['table-layout']);decisions=v.get('table_reviews',[])
     if not isinstance(decisions,list) or len(decisions)!=len(outstanding) or {r.get('issue_sha256') for r in decisions}!=set(outstanding):
@@ -81,13 +96,19 @@ def validate_release(manifest, visual):
         if row.get('decision') not in {'keep_separate','acceptable'} or not str(row.get('reason','')).strip():
             raise PolicyError('table-review-unresolved','表格 review 未解决；需要修改的对象须先修复并重跑审计。')
     return {'status':'passed','candidate':str(candidate),'candidate_sha256':m['candidate_sha256'],
-            'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked,'table_template_recheck':table_checked}
+            'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked,'table_template_recheck':table_checked,'final_rechecks':rechecks}
 
 
 def finalize(manifest,visual,out):
     result=validate_release(manifest,visual);candidate=Path(result['candidate']);out=Path(out)
     m=read(manifest) if not isinstance(manifest,dict) else manifest
     protected={candidate.resolve(),Path(m['source']).resolve(),Path(m['template']).resolve()}
+    for key in ('template_style_json','content_plan','text_rules','initial_visual_review','runtime_preflight'):
+        if m.get(key):protected.add(Path(m[key]).resolve())
+    for gate in m.get('gates',[]):protected.add(Path(gate['report']).resolve())
+    for page in (m.get('render') or {}).get('pages',[]):protected.add(Path(page['path']).resolve())
+    if not isinstance(manifest,dict):protected.add(Path(manifest).resolve())
+    if not isinstance(visual,dict):protected.add(Path(visual).resolve())
     if out.resolve() in protected:raise PolicyError('output-collision','交付文件路径不能覆盖候选、原始 Word 或模板。')
     out.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=out.parent,suffix='.docx',delete=False) as t:temp=Path(t.name)
@@ -101,8 +122,10 @@ def finalize(manifest,visual,out):
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('manifest',type=Path);ap.add_argument('visual_review',type=Path);ap.add_argument('--out',type=Path,required=True);ap.add_argument('--json-out',type=Path);a=ap.parse_args()
+    if a.json_out and a.json_out.resolve() in {a.manifest.resolve(),a.visual_review.resolve(),a.out.resolve()}:
+        print(json.dumps({'status':'failed','issues':[{'code':'report-output-collision','message':'报告不能覆盖清单、视觉记录或最终 Word。'}]},ensure_ascii=False));return 2
     try:result=finalize(a.manifest,a.visual_review,a.out)
-    except Exception as exc:result={'status':'failed','output':None,'issues':[exc.as_issue() if isinstance(exc,PolicyError) else {'severity':'error','code':'release-gate-error','message':str(exc)}]}
+    except Exception as exc:result={'status':'failed','output':None,'issues':[exc.as_issue() if hasattr(exc,'as_issue') else {'severity':'error','code':'release-gate-error','message':str(exc)}]}
     payload=json.dumps(result,ensure_ascii=False,indent=2)
     if a.json_out:a.json_out.parent.mkdir(parents=True,exist_ok=True);a.json_out.write_text(payload+'\n',encoding='utf-8')
     print(payload);return 0 if result['status']=='passed' else 2

@@ -7,7 +7,8 @@ import os
 import tempfile
 from pathlib import Path
 from numbering_policy import (Doc, PolicyError, file_digest, inventory, load_object_plan,
-                              normalize_document, visible)
+                              visible)
+from template_caption_policy import normalize_document
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_TEMPLATE = HERE.parent / 'assets' / 'default-template.docx'

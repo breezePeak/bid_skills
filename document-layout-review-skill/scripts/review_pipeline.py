@@ -13,14 +13,17 @@ import sys
 from pathlib import Path
 from numbering_policy import Doc, PolicyError, file_digest, inventory, public_inventory
 from figure_review import make_review_template, validate_initial
-from field_refresh import refresh, validate_report
+from field_refresh import refresh, validate_report, safe_fields
+from runtime_preflight import check as runtime_check, validate_docx, PreflightError
+from content_integrity import make_plan, register_footnote_changes, ContentIntegrityError
 
 HERE=Path(__file__).resolve().parent
 BUNDLE=HERE.parent
 DEFAULT_TEMPLATE=BUNDLE/'assets'/'default-template.docx'
 DEFAULT_STYLE_JSON=BUNDLE/'assets'/'default-template-style.json'
 REQUIRED_GATES={'numbering','caption-policy','punctuation','hard-text','structure',
-                'template-text','template-structure','table-template','table-layout','image-inventory','field-update'}
+                'template-text','template-structure','table-template','table-layout','image-inventory','field-update',
+                'template-effective-format','table-layout-template','content-integrity'}
 
 
 def write_json(path,data):
@@ -34,12 +37,16 @@ def load_json(path):
 
 
 def run_script(name,*args,allow=(0,)):
-    cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False)
+    cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False,timeout=300)
     return {'ok':cp.returncode in allow,'returncode':cp.returncode,'stdout':cp.stdout,'stderr':cp.stderr}
 
 
 def resolve_template(args,reports):
-    if args.template is None:return DEFAULT_TEMPLATE,DEFAULT_STYLE_JSON
+    if args.template is None:
+        profile = args.template_style_json or DEFAULT_STYLE_JSON
+        if not DEFAULT_TEMPLATE.is_file() or not profile.is_file():
+            raise PolicyError('template-missing','默认模板或本次模板约定不存在。')
+        return DEFAULT_TEMPLATE,profile
     if not args.template.is_file():raise PolicyError('template-missing','找不到本次模板。')
     if args.template_style_json is not None:
         if not args.template_style_json.is_file():raise PolicyError('template-profile-missing','找不到模板样式约定。')
@@ -72,7 +79,7 @@ def preserved_decisions(original,current,decisions):
     return {'version':1,'source_sha256':file_digest(current),'objects':rows}
 
 
-def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report):
+def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report,content_plan):
     gates=[]
     def gate(ident,script,args,predicate):
         report=reports/('gate-'+ident+'.json')
@@ -82,14 +89,17 @@ def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,obje
         gates.append({'id':ident,'passed':ok,'report':str(report),'report_sha256':file_digest(report) if report.is_file() else None,'result':data,'run':r})
     extra=['--object-plan',object_plan] if object_plan else []
     gate('numbering','numbering_audit.py',[candidate,'--template',template,'--template-style-json',style_json,*extra],lambda d:d.get('status')=='passed')
-    gate('caption-policy','numbering_policy.py',['audit',candidate,'--template',template,'--template-style-json',style_json,*extra],lambda d:d.get('status')=='passed')
+    gate('caption-policy','template_caption_policy.py',['audit',candidate,'--template',template,'--template-style-json',style_json,*extra],lambda d:d.get('status')=='passed')
     gate('punctuation','contextual_punctuation.py',[candidate],lambda d:d.get('issue_count',0)==0)
     gate('hard-text','hard_text_audit.py',[candidate],lambda d:d.get('status')=='passed')
     gate('structure','docx_audit.py',[candidate],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
     gate('template-text','template_usage_audit.py',[template,candidate,'--text-rules',rules_file],lambda d:d.get('status')=='passed' and d.get('text_rules_sha256')==rules_hash)
-    gate('template-structure','template_conformance.py',[template,candidate],lambda d:d.get('status')=='passed' or not d.get('errors'))
+    gate('template-structure','template_conformance.py',[template,candidate],lambda d:d.get('status')=='passed')
     gate('table-template','template_table_style.py',['audit',candidate,'--template',template,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
     gate('table-layout','table_layout_audit.py',[candidate,'--template-style-json',style_json],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
+    gate('template-effective-format','template_format_contract.py',[template,candidate,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
+    gate('table-layout-template','template_layout_contract.py',[template,candidate,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
+    gate('content-integrity','content_integrity.py',[source,candidate,'--content-plan',content_plan],lambda d:d.get('status')=='passed')
     rows=validate_initial(source,initial)
     actual=[o for o in inventory(Doc(candidate)) if o['kind']=='figure']
     data={'status':'passed' if {o['id'] for o in actual}==set(rows) else 'failed','objects':public_inventory(Doc(candidate)),'final_visual_review_required':bool(actual)}
@@ -109,10 +119,12 @@ def main():
     ap.add_argument('--text-rules',type=Path);ap.add_argument('--numbering-plan',type=Path);ap.add_argument('--object-plan',type=Path)
     ap.add_argument('--initial-visual-review',type=Path)
     ap.add_argument('--audit-only',action='store_true');ap.add_argument('--source',type=Path,help='audit-only 时必须指向原始 Word，而不是修改后的候选')
-    ap.add_argument('--field-engine',choices=['word','libreoffice'],default='word')
+    ap.add_argument('--field-engine',choices=['auto','word','libreoffice'],default='auto')
     ap.add_argument('--field-update-report',type=Path,help='audit-only 时已更新域候选的引擎报告')
+    ap.add_argument('--uno-python',help='可导入 uno 的 Python；不指定时自动探测')
+    ap.add_argument('--content-plan',type=Path,help='继续验收时沿用原始文件绑定的内容保护计划')
     args=ap.parse_args()
-    for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','source','field_update_report'):
+    for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','source','field_update_report','content_plan'):
         val=getattr(args,key)
         if val is not None:setattr(args,key,val.resolve())
     args.work_dir.mkdir(parents=True,exist_ok=True)
@@ -124,6 +136,24 @@ def main():
         if not args.audit_only and any((args.work_dir/name).resolve() in {args.input.resolve(),source.resolve()} for name in reserved):
             raise PolicyError('input-output-collision','工作目录中的阶段输出与输入重名；请选择新的工作目录，不能覆盖原文。')
 
+        template,style_json=resolve_template(args,reports)
+        if any((args.work_dir/name).resolve() in {template.resolve(),style_json.resolve()} for name in reserved):
+            raise PolicyError('template-output-collision','阶段输出不能覆盖模板或模板约定。')
+        preflight=runtime_check(source,template,args.work_dir,requested=args.field_engine,
+                                profile=style_json,audit_only=args.audit_only,uno_python=args.uno_python)
+        validate_docx(args.input)
+        safe_fields(args.input)
+        preflight_file=reports/'runtime-preflight.json';write_json(preflight_file,preflight)
+        content_plan=reports/'content-plan.json'
+        selected_plan=args.content_plan or (content_plan if args.audit_only and content_plan.is_file() else None)
+        if selected_plan is not None:
+            content_data=load_json(selected_plan)
+            if not isinstance(content_data,dict) or content_data.get('version')!=1 or content_data.get('source_sha256')!=file_digest(source):
+                raise PolicyError('content-plan-stale','内容保护计划不属于原始文件，不能把候选重新当作原文。')
+        else:
+            content_data=make_plan(source,args.object_plan)
+        write_json(content_plan,content_data)
+
         # A hash-bound initial inventory forces image inspection before mutation.
         initial=args.initial_visual_review
         if initial is None:
@@ -132,9 +162,9 @@ def main():
             if prepared['objects']:
                 write_json(reports/'object-inventory.json',{'version':1,'source_sha256':file_digest(source),'objects':public_inventory(Doc(source))})
                 result={'status':'requires_image_review','review':str(initial),'inventory':str(reports/'object-inventory.json'),'message':'Agent 先逐张查看真实原图、填写初检和缺题注语义计划，再继续；不是让用户手填。'}
+                write_json(args.work_dir/'review-manifest.json',result)
                 print(json.dumps(result,ensure_ascii=False,indent=2));return 4
         validate_initial(source,initial)
-        template,style_json=resolve_template(args,reports)
         from text_rules import load_rules,load_profile,expected_body_props,write_rules,rules_digest
         rules=load_rules(args.text_rules);expected_body_props(load_profile(template),rules)
         rules_file=reports/'text-rules.effective.json';write_rules(rules_file,rules);rules_hash=rules_digest(rules)
@@ -163,6 +193,8 @@ def main():
             object_args=['--object-plan',object_plan] if object_plan else []
             first=stage('00-numbering','numbering_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r,'--template',template,'--template-style-json',style_json,*numbering_args,*object_args])
             numbered=current
+            content_data=register_footnote_changes(source,numbered,first,content_data)
+            write_json(content_plan,content_data)
             stage('01-punctuation','contextual_punctuation.py',lambda c,o,r:[c,'--out',o,'--json-out',r])
             stage('02-whitespace','whitespace_repair.py',lambda c,o,r:[c,'--out',o,'--json-out',r])
             stage('03-template-style','template_style_enforce.py',lambda c,o,r:[template,style_json,c,'--out',o,'--json-out',r,'--text-rules',rules_file])
@@ -170,7 +202,7 @@ def main():
             # Normalize from the TEMPLATE first; do not freeze erroneous source fills.
             stage('04a-template-tables','template_table_style.py',lambda c,o,r:['repair',c,'--out',o,'--json-out',r,'--template',template,'--template-style-json',style_json])
             stage('05-tables','table_layout_repair.py',lambda c,o,r:[c,'--output',o,'--json-out',r,'--template',template])
-            stage('06-layout','docx_layout_policy.py',lambda c,o,r:[c,'--output',o,'--json-out',r])
+            stage('06-layout','docx_layout_policy.py',lambda c,o,r:[c,'--output',o,'--json-out',r,'--template',template,'--template-style-json',style_json])
             rebound=preserved_decisions(numbered,current,first.get('object_decisions',[]))
             object_plan=reports/'object-decisions.effective.json';write_json(object_plan,rebound)
             # The legacy template step must not reintroduce a source-derived list
@@ -182,10 +214,13 @@ def main():
         if args.audit_only:
             if args.field_update_report is None:raise PolicyError('field-update-report-missing','继续验收前必须实际更新最后修改后的 Word。')
             field_data=validate_report(candidate,args.field_update_report)
+            required={'word':'Microsoft Word','libreoffice':'LibreOffice UNO'}.get(args.field_engine)
+            if required and field_data.get('engine')!=required:
+                raise PolicyError('field-engine-mismatch','续跑时的真实域更新引擎不符合明确要求。',expected=required,actual=field_data.get('engine'))
         else:
             refreshed=args.work_dir/'candidate-refreshed.docx'
             try:
-                field_data=refresh(candidate,refreshed,args.field_engine)
+                field_data=refresh(candidate,refreshed,args.field_engine,args.uno_python,preflight=preflight['field_engine'])
                 shutil.copy2(refreshed,candidate)
             except PolicyError as exc:
                 result={'status':'requires_field_update','candidate':str(candidate),'candidate_sha256':file_digest(candidate),'issues':[exc.as_issue()],
@@ -193,16 +228,18 @@ def main():
                 write_json(args.work_dir/'review-manifest.json',result)
                 print(json.dumps(result,ensure_ascii=False,indent=2));return 4
         field_report=reports/'field-update.json';write_json(field_report,field_data)
-        gates=check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report)
+        gates=check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report,content_plan)
         render_run=run_script('render_docx.py',candidate,'--out-dir',render_dir)
         try:render_data=json.loads(render_run['stdout']) if render_run['ok'] else {}
         except ValueError:render_data={}
         pages=[{'path':str(Path(p).resolve()),'name':Path(p).name,'sha256':file_digest(Path(p))} for p in render_data.get('pages',[]) if Path(p).is_file()]
         ok=all(g['passed'] for g in gates) and bool(render_run['ok'] and pages)
-        manifest={'version':4,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
+        manifest={'version':5,'field_engine_requested':args.field_engine,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
                   'candidate':str(candidate.resolve()),'candidate_sha256':file_digest(candidate),'template':str(template.resolve()),'template_sha256':file_digest(template),
                   'template_style_json':str(style_json.resolve()),'template_style_sha256':file_digest(style_json),
-                  'text_rules':str(rules_file.resolve()),'text_rules_sha256':rules_hash,'object_plan':str(object_plan.resolve()) if object_plan else None,
+                  'text_rules':str(rules_file.resolve()),'text_rules_sha256':rules_hash,'text_rules_file_sha256':file_digest(rules_file),
+                  'content_plan':str(content_plan.resolve()),'content_plan_sha256':file_digest(content_plan),
+                  'runtime_preflight':str(preflight_file.resolve()),'runtime_preflight_sha256':file_digest(preflight_file),'object_plan':str(object_plan.resolve()) if object_plan else None,
                   'initial_visual_review':str(initial.resolve()),'initial_visual_review_sha256':file_digest(initial),'stages':stages,'gates':gates,
                   'render':{'passed':bool(render_run['ok'] and pages),'run':render_run,'data':render_data,'pages':pages},
                   'next':'Agent 逐张对照原图/新图并逐页终检。初检出框、重叠、内嵌题注等缺陷必须关闭；只改报告不能放行。最后使用 finalize_review.py。'}
@@ -226,7 +263,8 @@ def main():
         print(json.dumps({'status':manifest['status'],'candidate':str(candidate),'manifest':str(args.work_dir/'review-manifest.json'),'visual_review_template':str(reports/'final-visual-review.template.json'),'failed_gates':[g['id'] for g in gates if not g['passed']]},ensure_ascii=False,indent=2))
         return 0 if ok else 2
     except Exception as exc:
-        result={'status':'failed','issues':[exc.as_issue() if isinstance(exc,PolicyError) else {'severity':'error','code':'review-pipeline-error','message':str(exc)}],'stages':stages}
+        result={'status':'failed','issues':[exc.as_issue() if hasattr(exc,'as_issue') else {'severity':'error','code':'review-pipeline-error','message':str(exc)}],'stages':stages}
+        write_json(args.work_dir/'review-manifest.json',result)
         write_json(reports/'pipeline-failure.json',result);print(json.dumps(result,ensure_ascii=False,indent=2));return 2
 
 

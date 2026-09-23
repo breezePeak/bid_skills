@@ -9,6 +9,7 @@ import re
 import zipfile
 from pathlib import Path
 from lxml import etree
+from template_format_contract import StyleResolver, copy_style_dependencies, repair_paragraph, paragraph_style, expected_style_id
 from numbering_core import preserve_heading_numbering
 from text_rules import (
     body_paragraph_items,
@@ -114,28 +115,7 @@ def clear_run_font_size_overrides(
 
 
 def replace_style_definitions(target_styles: bytes, template_styles: bytes, style_ids: set[str]) -> bytes:
-    troot = etree.fromstring(target_styles)
-    sroot = etree.fromstring(template_styles)
-    # docDefaults 也属于模板字体基线。
-    tdd = troot.find(Q("docDefaults"))
-    sdd = sroot.find(Q("docDefaults"))
-    if sdd is not None:
-        if tdd is not None:
-            troot.replace(tdd, copy.deepcopy(sdd))
-        else:
-            troot.insert(0, copy.deepcopy(sdd))
-    source = {s.get(Q("styleId")): s for s in sroot.findall(Q("style"))}
-    target = {s.get(Q("styleId")): s for s in troot.findall(Q("style"))}
-    for sid in style_ids:
-        if sid not in source:
-            continue
-        replacement = copy.deepcopy(source[sid])
-        if sid in target:
-            old = target[sid]
-            troot.replace(old, replacement)
-        else:
-            troot.append(replacement)
-    return etree.tostring(troot, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return copy_style_dependencies(target_styles, template_styles, style_ids)
 
 
 def paragraph_section_map(body: etree._Element) -> dict[etree._Element, int]:
@@ -228,6 +208,14 @@ def main() -> int:
         tnames = set(zt.namelist())
         dnames = set(zd.namelist())
         target_files = {n: zd.read(n) for n in zd.namelist()}
+        template_style_root=etree.fromstring(zt.read('word/styles.xml'))
+        available={x.get(Q('styleId')) for x in template_style_root.findall(Q('style'))}
+        for name in dnames:
+            if not name.startswith('word/') or not name.endswith('.xml') or not Path(name).stem.startswith(('document','header','footer','footnotes','endnotes')):
+                continue
+            story=etree.fromstring(zd.read(name))
+            for ref in story.xpath('.//w:pStyle|.//w:rStyle',namespaces=NS):
+                if ref.get(Q('val')) in available:canonical_style_ids.add(ref.get(Q('val')))
         target_files["word/styles.xml"] = replace_style_definitions(
             target_files["word/styles.xml"], zt.read("word/styles.xml"), canonical_style_ids
         )
@@ -244,6 +232,9 @@ def main() -> int:
             raise SystemExit("document.xml 缺少 w:body")
         sections = paragraph_section_map(body)
         body_candidates = {p for _, p in body_paragraph_items(root, template_profile, source_profile)}
+        expected_format = StyleResolver(zt.read("word/styles.xml"))
+        current_format = StyleResolver(target_files["word/styles.xml"])
+        extra_format_changes = []
         counts: dict[str, int] = {}
         override_removed = 0
         pstyle_changed = 0
@@ -286,7 +277,25 @@ def main() -> int:
                     apply_explicit_body_overrides(rpr, rules)
                     if len(rpr) == 0:
                         run.remove(rpr)
+            if role != "image_paragraph":
+                changes = repair_paragraph(p, sid, expected_format, current_format)
+                if changes:
+                    extra_format_changes.append({"role": role, "changes": changes})
             counts[role] = counts.get(role, 0) + 1
+        # Cover mapped paragraphs outside the ordinary-body classifier as well.
+        # Unknown semantic styles are left for explicit mapping and blocked by audit.
+        stories={'word/document.xml':root}
+        for name in dnames:
+            if name!='word/document.xml' and name.startswith('word/') and name.endswith('.xml') and Path(name).stem.startswith(('header','footer','footnotes','endnotes')):
+                stories[name]=etree.fromstring(target_files[name])
+        for name,story in stories.items():
+            for pi,p in enumerate(story.iter(Q('p')),1):
+                if p.xpath('ancestor::w:tc|ancestor::w:drawing|ancestor::w:pict|ancestor::w:txbxContent',namespaces=NS):continue
+                sid=expected_style_id(paragraph_style(p,current_format),expected_format,roles)
+                if sid in expected_format.styles:
+                    extra_format_changes.extend({'part':name,'paragraph':pi,**change} for change in repair_paragraph(p,sid,expected_format,current_format))
+            if name!='word/document.xml':
+                target_files[name]=etree.tostring(story,xml_declaration=True,encoding='UTF-8',standalone=True)
         target_files["word/document.xml"] = etree.tostring(
             root, xml_declaration=True, encoding="UTF-8", standalone=True
         )
@@ -305,6 +314,7 @@ def main() -> int:
         "paragraph_style_changes": pstyle_changed,
         "inherited_heading_numbering_preserved": preserved_heading_numbering,
         "direct_overrides_removed": override_removed,
+        "extra_format_changes": extra_format_changes,
     }
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if a.json_out:

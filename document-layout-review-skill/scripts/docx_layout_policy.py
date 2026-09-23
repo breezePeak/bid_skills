@@ -99,47 +99,30 @@ def section_records(body: ET.Element):
     return records
 
 
-def repair_document_xml(xml: bytes, technical_bid_policy: bool):
-    root = ET.fromstring(xml)
-    body = root.find("w:body", NS)
-    if body is None:
-        raise ValueError("DOCX document.xml lacks w:body")
-
-    report = {"centered_cells": 0, "portrait_sections": [], "blocked_mixed_sections": []}
-    for tc in root.findall(".//w:tc", NS):
-        tcpr = tc.find("w:tcPr", NS)
-        if tcpr is None:
-            tcpr = ET.Element(qn("tcPr"))
-            tc.insert(0, tcpr)
-        valign = tcpr.find("w:vAlign", NS)
-        if valign is None:
-            valign = ET.SubElement(tcpr, qn("vAlign"))
-        if valign.get(qn("val")) != "center":
-            valign.set(qn("val"), "center")
-            report["centered_cells"] += 1
-
-    if technical_bid_policy:
-        records = section_records(body)
-        for record in records:
-            if record["orientation"] != "landscape":
-                continue
-            if record["contains_technical_deviation"]:
-                if record["mixed_after_deviation"]:
-                    # Safe automatic split requires stronger semantic ownership than this utility has.
-                    report["blocked_mixed_sections"].append(record["index"])
-                continue
-            if set_portrait(record["sect"]):
-                report["portrait_sections"].append(record["index"])
-
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True), report
+def repair_document_xml(xml: bytes, technical_bid_policy: bool = False,
+                        template: Path | None = None, template_style_json: Path | None = None):
+    from template_layout_contract import repair_xml
+    active = template or Path(__file__).resolve().parent.parent / "assets" / "default-template.docx"
+    updated, report = repair_xml(xml, active, template_style_json)
+    # The old keyword is accepted for compatibility, not used to infer layout
+    # from business words such as “技术偏离表”. Page geometry is audited separately.
+    report.update(centered_cells=0, portrait_sections=[], blocked_mixed_sections=[],
+                  template=str(active), legacy_flag_ignored=bool(technical_bid_policy))
+    return updated, report
 
 
 def write_docx(source: Path, output: Path, document_xml: bytes):
+    import os
+    if source.resolve() == output.resolve():
+        raise ValueError("输出不能覆盖原始文档。")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(output, "w") as dst:
-        for info in src.infolist():
-            data = document_xml if info.filename == "word/document.xml" else src.read(info.filename)
-            dst.writestr(info, data)
+    with tempfile.TemporaryDirectory(dir=output.parent) as work:
+        candidate = Path(work) / "layout.docx"
+        with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(candidate, "w") as dst:
+            for info in src.infolist():
+                data = document_xml if info.filename == "word/document.xml" else src.read(info.filename)
+                dst.writestr(info, data)
+        os.replace(candidate, output)
 
 
 def main() -> int:
@@ -148,11 +131,13 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--technical-bid-policy", action="store_true")
     ap.add_argument("--json-out", type=Path)
+    ap.add_argument("--template", type=Path)
+    ap.add_argument("--template-style-json", type=Path)
     args = ap.parse_args()
 
     with zipfile.ZipFile(args.docx, "r") as z:
         xml = z.read("word/document.xml")
-    updated, report = repair_document_xml(xml, args.technical_bid_policy)
+    updated, report = repair_document_xml(xml, args.technical_bid_policy, args.template, args.template_style_json)
     if report["blocked_mixed_sections"]:
         report["status"] = "blocked"
         report["message"] = "技术偏离表横向节混入后续普通章节；需先在偏离表结束处建立纵向分节。"

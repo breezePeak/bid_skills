@@ -3,7 +3,7 @@
 
 Goals:
 - preserve the input's approved visual style; never infer a decorative style by frequency;
-- repair structural layout only (widths, alignment, margins, header repeat);
+- repair widths only; alignment, margins and repeated headers belong to the template;
 - use content-aware widths instead of equal-width or stale template widths;
 - use a stable semantic width contract for the technical deviation table;
 - never rotate ordinary technical-bid tables to landscape.
@@ -18,7 +18,6 @@ import zipfile
 from pathlib import Path
 import os
 import tempfile
-from layout_invariant_guard import snapshot_docx, changed_invariants
 from xml.etree import ElementTree as ET
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -301,7 +300,8 @@ def table_section_widths(body: ET.Element) -> dict[int, int]:
     def emit(sect: ET.Element):
         width = section_content_width(sect)
         for el in current:
-            for tbl in el.findall(".//w:tbl", NS):
+            tables = ([el] if el.tag == qn("tbl") else []) + el.findall(".//w:tbl", NS)
+            for tbl in tables:
                 result[id(tbl)] = width
         current.clear()
     for child in list(body):
@@ -369,9 +369,7 @@ def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[floa
     tblw.set(qn("type"), "dxa")
     layout = ensure_child(tblpr, "tblLayout")
     layout.set(qn("type"), "fixed")
-    jc = ensure_child(tblpr, "jc")
-    jc.set(qn("val"), "center")
-    set_table_margins(tblpr)
+    # Alignment and margins were resolved from the active template; keep them.
 
     grid = tbl.find("w:tblGrid", NS)
     if grid is None:
@@ -389,8 +387,6 @@ def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[floa
         if trpr is None:
             trpr = ET.Element(qn("trPr"))
             row.insert(0, trpr)
-        if r_index == 0:
-            set_val(trpr, "tblHeader", "1")
         for tc, start, end in row_cells_by_column(row, count):
             tcpr = tc.find("w:tcPr", NS)
             if tcpr is None:
@@ -399,8 +395,6 @@ def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[floa
             tcw = ensure_child(tcpr, "tcW")
             tcw.set(qn("w"), str(sum(widths[start:end])))
             tcw.set(qn("type"), "dxa")
-            valign = ensure_child(tcpr, "vAlign")
-            valign.set(qn("val"), "center")
             # Do not rewrite paragraph/run styles, text, fills, borders or colors.
             # Zero-indent and font fixes run in the existing table-text-style step.
     return {
@@ -463,6 +457,7 @@ def write_docx(source: Path, output: Path, document_xml: bytes):
     """Publish only a candidate that passes the table-layout scope check."""
     if source.resolve() == output.resolve():
         raise ValueError("Output must differ from input; keep the baseline DOCX.")
+    from layout_invariant_guard import snapshot_docx, changed_invariants
     baseline = snapshot_docx(source)
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".table-layout-", suffix=".docx", dir=output.parent)
