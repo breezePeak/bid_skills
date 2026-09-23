@@ -28,12 +28,15 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 | `text-style` | 普通正文/标题 run、paragraph 样式 | 可见文字内容、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `text-content` | 明确命中的字符内容 | run/p 样式、表格结构与几何、图片/Shape、媒体、关系、页面/分节 |
 | `table-text-style` | 表格单元格内 run/p 样式 | 可见文字内容、表格结构与几何、表外文字样式、图片/Shape、媒体、关系、页面/分节 |
-| `table-layout` | 表格布局/几何属性 | 可见文字内容、文字样式、表格语义结构、图片/Shape、媒体、关系、页面/分节 |
-| `image-layout` | 被命中的图片/Shape 布局及其媒体/关系 | 可见文字内容、文字样式、表格结构与几何、页面/分节 |
+| `table-layout` | 表格宽度、列宽、内边距、垂直居中和重复表头 | 可见文字内容、文字样式、表格语义结构、表格样式/底色/边框色/文字颜色、图片/Shape、媒体、关系、页面/分节 |
+| `image-layout` | 被命中的图片/Shape 尺寸和定位 | 原媒体、关系、图内内容和配色、裁切设置、可见文字内容、文字样式、表格结构/几何/外观、页面/分节 |
+| `figure-pagination` | 现有段落的 pageBreakBefore / keepNext / keepLines | 原媒体、图片/Shape、文字内容与其他文字样式、表格结构/几何/外观、关系、页面方向与分节 |
 | `flowchart-redraw` | 被命中的流程图 drawing/media/relationship | 可见正文内容、文字样式、表格结构与几何、页面/分节 |
 | `page-layout` | section/page 属性 | 可见文字内容、文字样式、表格结构与几何、图片/Shape、媒体、关系 |
 
-禁止 `scope=all`。
+禁止 `scope=all`。这张表是修复范围，不是重新设计许可。`flowchart-redraw` 只可用于问题清单确认的图内缺陷或用户明确重设计要求，仍须核对源风格。
+
+所有范围新增 `table_appearance` 保护：表格样式/条件样式、直接及继承的底色、边框和颜色。`image-layout` 额外冻结媒体、关系和图内内容；不能用该 scope 换一张新图。新快照新增字段，旧快照缺字段时必须从原基准重新生成，不能当作通过。
 
 `automatic-numbering` 必须独立执行。`numbering_repair.py` 内部已比较本范围冻结项；仍须通过 `numbering_audit.py` 和最新页面复查。此范围允许必要的域/脚注结构变化，不允许重写业务内容；不能把单纯的范围检查通过当作内容与编号均正确。
 
@@ -47,7 +50,7 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 - `vMerge`；
 - 单元格顺序。
 
-`table-layout` 只允许解决几何/分页，不允许改变表格业务结构。
+`table-layout` 只允许解决几何/分页，不允许改变表格业务结构。需要的纵向合并、物理网格修复仍按既有语义规则单独确认和核对，再进入布局步骤；列宽脚本不代做结构转换。
 
 ## 4. 文字修复时的冻结项
 
@@ -76,13 +79,17 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 - hanging = 0；
 - 表格几何完全冻结。
 
-通过 guard 后，若表格本身仍有布局问题，再单独执行 `table-layout`。
+通过 guard 后，若表格本身仍有布局问题，再单独执行 `table-layout`。列宽脚本不再顺手设置段落样式或单倍行距，避免覆盖刚确认的文字基准。
+
+外观变更仅能来自明确用户要求或适用于该表的模板规定。先记录来源、对象、属性和前后变化，单独完成并复核后再建立布局基准。不得以“模板里最常见”“模型认为更好看”作为授权，也不得用失败候选重新快照掩盖变化。
 
 ## 6. 图片默认冻结
 
 图片不是普通正文装饰，不得在文字修复中被自动归一化。
 
-只有问题清单明确命中的图片，才允许进入 `image-layout`。
+只有问题清单明确命中的图片，才允许进入 `image-layout`。只修大小、定位时，原媒体和图内内容必须不变；不得重绘、重编码、换 rId 指向其他图片、改配色或裁切内容。
+
+当前页空间不足时，优先让“原图 + 图题”独占一页，保持页面方向和页边距。只修改现有段落的分页标志，用 `figure-pagination` 比较；如还需调整图片大小，另开 `image-layout` 轮次。不要添加空段堆页，不把删除正文当作腾空间。
 
 默认禁止：
 
@@ -100,6 +107,12 @@ python3 scripts/layout_invariant_guard.py compare guard.json candidate.docx --sc
 3. 修改单个表格或图片；
 4. 只有确实必要时才重建一个对象；
 5. 禁止为了局部问题重建整个 document.xml。
+
+## 程序检查边界
+
+外观检查比较 DOCX 属性、被引用的表格/文字样式装饰、主题色及媒体签名，不是完整 Word 样式渲染器。等效但不同写法也可能被保守标记；需要核对，不得自动忽略。`image-layout` 对图内形状/配色/裁切与媒体引用做冻结，但不替代比例、清晰度和定位的视觉判断。
+
+`flowchart-redraw` 必须允许目标媒体变化，因此原图风格是否保留不能由媒体哈希证明。仍须原图/新图并排验收，并检查非目标图未改变。scope 检查不能证明模型读懂了图，也不保证宿主一定调用检查器。
 
 ## 8. 失败处理
 

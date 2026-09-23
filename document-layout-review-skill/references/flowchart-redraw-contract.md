@@ -2,9 +2,21 @@
 
 ## Purpose
 
-Most real flowcharts arrive as raster images or screenshots, not editable graph data. The repair workflow therefore reconstructs the complete semantic graph from the **whole original image** and redraws a new diagram from that graph.
+This contract applies only when a confirmed defect inside the source figure
+cannot be repaired by document placement/pagination, or when the user explicitly
+requests redesign. Merely being a raster image or occupying a large part of a
+page is not permission to redraw.
 
-Do not treat the original image as an editable canvas. Do not patch individual arrows, move a few boxes, or shrink the image and call it repaired.
+For a sound image, keep its media and style; resize proportionately when readable,
+or put the original image and its caption on a dedicated page. For an actual
+intrinsic defect, reconstruct the complete semantic graph from the **whole
+original image**. Do not hide broken connectors by shrinking or patching a bitmap.
+
+Before redraw, record the defect and the source appearance: palette/fills, border
+style, square/rounded corners, font style, grouping and reading direction. Keep
+that appearance unless a specific user/template requirement authorizes a change.
+The source-style record may accompany the semantic spec; a renderer that ignores
+it must not be used to replace the original figure with its default design.
 
 ## Whole-image-first rule
 
@@ -111,7 +123,9 @@ A redrawn flowchart is acceptable only when both conditions hold:
 - same meaningful labels;
 - same phase/group relationships when present.
 
-### Visual quality
+### Visual quality and source-style continuity
+
+Compare the whole original and whole redraw side by side. Retain the source palette, shape style, typography and group hierarchy; do not treat a different generic theme as a successful repair.
 
 - text fits inside nodes;
 - arrows attach at node borders;
@@ -143,7 +157,7 @@ If semantics pass but layout fails, re-layout and redraw. Do not change semantic
 语义等价并不代表绘图合格。重绘结果还必须通过几何检查：
 
 - 连线不得穿过无关节点；
-- 普通业务流程连接线必须使用正交路由；
+- 重绘普通业务流程时优先使用正交路由；原图中无歧义的斜线不是强制重绘理由；
 - 不得存在无法判定归属的连线交叉；
 - 回退、整改、重试、复测等循环边必须走外围回廊；
 - 箭头必须落在正确目标节点的边界；

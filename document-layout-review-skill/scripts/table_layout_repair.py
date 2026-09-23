@@ -2,7 +2,7 @@
 """Deterministic DOCX table reflow for document-layout-review.
 
 Goals:
-- keep the active template's fonts/borders/fills/styles;
+- preserve the input's approved visual style; never infer a decorative style by frequency;
 - repair structural layout only (widths, alignment, margins, header repeat);
 - use content-aware widths instead of equal-width or stale template widths;
 - use a stable semantic width contract for the technical deviation table;
@@ -15,8 +15,10 @@ import json
 import math
 import re
 import zipfile
-from collections import defaultdict
 from pathlib import Path
+import os
+import tempfile
+from layout_invariant_guard import snapshot_docx, changed_invariants
 from xml.etree import ElementTree as ET
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -345,7 +347,9 @@ def set_paragraph_alignment(p: ET.Element, value: str):
 
 
 def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[float] | None = None, template_table_style: str | None = None, template_text_style: str | None = None) -> dict:
-    structure_changes = normalize_technical_deviation_structure(tbl)
+    # Semantic grid conversion/merging belongs to a separately reviewed step.
+    # Keep the helper available, but width repair must not silently change cells.
+    structure_changes = 0
     count = logical_column_count(tbl)
     if count <= 0:
         return {"changed": False, "reason": "no-columns"}
@@ -358,9 +362,8 @@ def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[floa
     if tblpr is None:
         tblpr = ET.Element(qn("tblPr"))
         tbl.insert(0, tblpr)
-    if template_table_style:
-        style = ensure_child(tblpr, "tblStyle")
-        style.set(qn("val"), template_table_style)
+    # Deprecated style parameters are retained for call compatibility only.
+    # Style application belongs to the explicit template/text-style step.
     tblw = ensure_child(tblpr, "tblW")
     tblw.set(qn("w"), str(total_width))
     tblw.set(qn("type"), "dxa")
@@ -398,22 +401,8 @@ def repair_table(tbl: ET.Element, content_width: int, template_ratios: list[floa
             tcw.set(qn("type"), "dxa")
             valign = ensure_child(tcpr, "vAlign")
             valign.set(qn("val"), "center")
-            # Remove zero-width artifacts from visible cell text without touching run formatting.
-            for t in tc.findall(".//w:t", NS):
-                if t.text:
-                    t.text = "".join(ch for ch in t.text if ch not in ZERO_WIDTH)
-            # Headers and compact semantic columns are centered; narrative cells stay left aligned.
-            align = "center" if r_index == 0 or (start < len(roles) and roles[start] == "compact") else "left"
-            for p in tc.findall("w:p", NS):
-                if template_text_style:
-                    ppr = p.find("w:pPr", NS)
-                    if ppr is None:
-                        ppr = ET.Element(qn("pPr")); p.insert(0, ppr)
-                    pstyle = ppr.find("w:pStyle", NS)
-                    if pstyle is None:
-                        pstyle = ET.Element(qn("pStyle")); ppr.insert(0, pstyle)
-                    pstyle.set(qn("val"), template_text_style)
-                set_paragraph_alignment(p, align)
+            # Do not rewrite paragraph/run styles, text, fills, borders or colors.
+            # Zero-indent and font fixes run in the existing table-text-style step.
     return {
         "changed": True,
         "technical_deviation": is_technical_deviation_table(tbl),
@@ -438,8 +427,6 @@ def template_contract(template: Path | None):
     with zipfile.ZipFile(template, "r") as z:
         root = ET.fromstring(z.read("word/document.xml"))
     samples = {}
-    table_style_counts = defaultdict(int)
-    text_style_counts = defaultdict(int)
     for tbl in root.findall(".//w:tbl", NS):
         count = logical_column_count(tbl)
         grid = tbl.findall("w:tblGrid/w:gridCol", NS)
@@ -449,16 +436,8 @@ def template_contract(template: Path | None):
             except ValueError: vals.append(0)
         if count and len(vals) == count and sum(vals) > 0:
             samples[header_signature(tbl)] = [v / sum(vals) for v in vals]
-        style = tbl.find("w:tblPr/w:tblStyle", NS)
-        if style is not None and style.get(qn("val")):
-            table_style_counts[style.get(qn("val"))] += 1
-        for p in tbl.findall(".//w:p", NS):
-            ps = p.find("w:pPr/w:pStyle", NS)
-            if ps is not None and ps.get(qn("val")):
-                text_style_counts[ps.get(qn("val"))] += 1
-    table_style = max(table_style_counts, key=table_style_counts.get) if table_style_counts else None
-    text_style = max(text_style_counts, key=text_style_counts.get) if text_style_counts else None
-    return samples, table_style, text_style
+    # A frequent template style is not authorization to restyle every table.
+    return samples, None, None
 
 
 def repair_document_xml(xml: bytes, template: Path | None = None) -> tuple[bytes, dict]:
@@ -481,24 +460,40 @@ def repair_document_xml(xml: bytes, template: Path | None = None) -> tuple[bytes
 
 
 def write_docx(source: Path, output: Path, document_xml: bytes):
+    """Publish only a candidate that passes the table-layout scope check."""
+    if source.resolve() == output.resolve():
+        raise ValueError("Output must differ from input; keep the baseline DOCX.")
+    baseline = snapshot_docx(source)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(output, "w") as dst:
-        for info in src.infolist():
-            data = document_xml if info.filename == "word/document.xml" else src.read(info.filename)
-            dst.writestr(info, data)
+    fd, temporary = tempfile.mkstemp(prefix=".table-layout-", suffix=".docx", dir=output.parent)
+    os.close(fd)
+    candidate = Path(temporary)
+    try:
+        with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(candidate, "w") as dst:
+            for info in src.infolist():
+                data = document_xml if info.filename == "word/document.xml" else src.read(info.filename)
+                dst.writestr(info, data)
+        changed = changed_invariants(baseline, snapshot_docx(candidate), "table-layout")
+        if changed:
+            raise ValueError("Table layout changed protected properties: " + ", ".join(changed))
+        os.replace(candidate, output)
+    finally:
+        candidate.unlink(missing_ok=True)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Reflow DOCX tables with content-aware fixed widths while preserving template styles.")
+    ap = argparse.ArgumentParser(description="Reflow DOCX table geometry while preserving the approved appearance and text styles.")
     ap.add_argument("docx", type=Path)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--json-out", type=Path)
-    ap.add_argument("--template", type=Path, help="Active DOCX template; matching table widths/styles are reused before content-aware fallback.")
+    ap.add_argument("--template", type=Path, help="Active DOCX template; matching widths are a reference only; table styles/fills are never copied here.")
     args = ap.parse_args()
     with zipfile.ZipFile(args.docx, "r") as z:
         xml = z.read("word/document.xml")
     updated, report = repair_document_xml(xml, args.template)
     write_docx(args.docx, args.output, updated)
+    report["repair_scope"] = "table-layout"
+    report["scope_guard"] = "passed"
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)

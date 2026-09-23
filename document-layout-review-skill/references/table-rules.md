@@ -10,13 +10,31 @@ Passing XML validity, keeping a table style ID, or merely staying inside page ma
 
 When an active template exists:
 
-1. keep the template's table style, borders, fills, fonts and table-text style;
+1. apply only the template requirements explicitly mapped to this table and property; preserve the approved source appearance for unspecified decorative properties;
 2. preserve template-specific physical structure where it is an approved contract;
 3. treat existing template column proportions as a **prior/reference**, not an unconditional final answer;
 4. if actual table content is materially different from the template example, rebalance widths using the current table's header and body content pressure;
 5. structural layout repairs are required when old widths are visually broken or incompatible with actual content.
 
 Do not use “the template already had this width” as a reason to preserve an obviously unbalanced table.
+
+## Layout does not authorize restyling
+
+Keep the source table's approved `tblStyle`, `tblLook`, fills, borders and colors
+during width repair. A header with no fill must remain without an added fill; an
+existing approved colored header must not be indiscriminately stripped. Never
+select the most frequent template table style as a substitute for an explicit
+mapping. Explicit user/template color requirements are applied and recorded as a
+separate style operation before establishing the approved layout baseline.
+
+Run `layout_invariant_guard.py` before/after the layout step. It checks direct
+shading as well as inherited and conditional table-style decorations. A style ID
+remaining unchanged is not sufficient if its definition has changed.
+
+`table_layout_repair.py` no longer applies paragraph styles, cleans text or
+changes cell structure during a width repair. Keep using the existing text-style
+and semantic-structure steps for those tasks. Its writer refuses to publish a
+candidate that changes protected appearance or other table-layout invariants.
 
 ## Required inspection order
 
@@ -209,7 +227,9 @@ A table fails when any of the following is true:
 - repeated page sections have inconsistent column widths;
 - required vertical centering is missing;
 - font is aggressively shrunk to compensate for bad layout;
-- table orientation is changed just to hide width problems.
+- table orientation is changed just to hide width problems;
+- unrequested header/row fills, border colors or text colors are introduced;
+- a template style is substituted without an explicit mapping for this table.
 
 ## Review-level findings
 

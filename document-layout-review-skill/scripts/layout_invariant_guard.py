@@ -185,10 +185,164 @@ def package_hash_group(z: zipfile.ZipFile, predicate) -> str:
     return sha(json.dumps(rows, separators=(",", ":")).encode("utf-8"))
 
 
+
+# Decorative properties are not table geometry. Include inherited/conditional
+# definitions as well as direct formatting, without locking unrelated font rules.
+DECORATION = {q(W, n) for n in (
+    "shd", "tblBorders", "tcBorders", "pBdr", "color", "highlight",
+    "tblLook", "cnfStyle", "tblStyleRowBandSize", "tblStyleColBandSize",
+)}
+
+
+def decoration_rows(root: ET.Element) -> list:
+    rows = []
+
+    def walk(e: ET.Element, path: str) -> None:
+        if e.tag in DECORATION:
+            rows.append((path, stable_elem(e)))
+            return
+        counts: dict[str, int] = {}
+        for c in e:
+            index = counts.get(c.tag, 0)
+            counts[c.tag] = index + 1
+            # Type distinguishes firstRow, band1Horz, etc. in table style rules.
+            kind = c.get(q(W, "type"), "")
+            walk(c, f"{path}/{local(c.tag)}[{index}]{kind}")
+
+    walk(root, local(root.tag))
+    return rows
+
+
+def table_appearance(parts: list[tuple[str, ET.Element]], z: zipfile.ZipFile) -> str:
+    """Freeze table style/look, fills, borders and colors, including style chains.
+
+    This is a conservative declaration-level check, not a full Word style
+    renderer. Equivalent-looking but differently declared colors can be flagged;
+    changed declarations must be reviewed rather than silently accepted.
+    """
+    styles_root = ET.fromstring(z.read("word/styles.xml")) if "word/styles.xml" in z.namelist() else ET.Element(q(W, "styles"))
+    styles = {e.get(q(W, "styleId")): e for e in styles_root.findall(q(W, "style"))}
+    defaults = {e.get(q(W, "type")): e.get(q(W, "styleId")) for e in styles.values()
+                if e.get(q(W, "default")) in {"1", "true", "on"}}
+    rows = []
+
+    def inherited(sid: str | None) -> list:
+        result, seen = [], set()
+        while sid and sid not in seen:
+            seen.add(sid)
+            style = styles.get(sid)
+            if style is None:
+                result.append(("missing-style", sid))
+                sid = None
+                break
+            projection = decoration_rows(style)
+            if projection:
+                result.append(projection)
+            parent = style.find(q(W, "basedOn"))
+            sid = parent.get(q(W, "val")) if parent is not None else None
+        if sid in seen:
+            # A cycle must not silently disappear from the snapshot.
+            result.append(("style-cycle", sid))
+        return result
+
+    for name, root in parts:
+        for ti, tbl in enumerate(root.iter(q(W, "tbl"))):
+            style_ref = tbl.find(f"{q(W, 'tblPr')}/{q(W, 'tblStyle')}")
+            sid = style_ref.get(q(W, "val")) if style_ref is not None else defaults.get("table")
+            # Paragraph/character style changes with no decorative effect do not
+            # block the existing template font/size normalization stages.
+            text_decor = []
+            for p in tbl.iter(q(W, "p")):
+                pstyle = p.find(f"{q(W, 'pPr')}/{q(W, 'pStyle')}")
+                psid = pstyle.get(q(W, "val")) if pstyle is not None else defaults.get("paragraph")
+                pd = inherited(psid)
+                if pd:
+                    text_decor.append(("paragraph", pd))
+                for r in p.findall(q(W, "r")):
+                    rstyle = r.find(f"{q(W, 'rPr')}/{q(W, 'rStyle')}")
+                    rsid = rstyle.get(q(W, "val")) if rstyle is not None else defaults.get("character")
+                    rd = inherited(rsid)
+                    if rd:
+                        text_decor.append(("run", rd))
+            rows.append((name, ti, sid, decoration_rows(tbl), inherited(sid), text_decor))
+    if rows:
+        dd = styles_root.find(q(W, "docDefaults"))
+        if dd is not None:
+            rows.append(("defaults", decoration_rows(dd)))
+        # Font-theme updates alone are not color changes. Color themes matter
+        # only when a protected decorative property actually references them.
+        serialized = json.dumps(rows, ensure_ascii=False)
+        if any(k in serialized for k in ("themeColor", "themeFill", "themeTint", "themeShade")):
+            for name in sorted(z.namelist()):
+                if name.startswith("word/theme/") and name.endswith(".xml"):
+                    theme = ET.fromstring(z.read(name))
+                    rows.append((name, [stable_elem(e) for e in theme.iter(q(A, "clrScheme"))]))
+            if "word/settings.xml" in z.namelist():
+                settings = ET.fromstring(z.read("word/settings.xml"))
+                rows.append(("color-mapping", [stable_elem(e) for e in settings.iter(q(W, "clrSchemeMapping"))]))
+    return sha(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def drawing_content(parts: list[tuple[str, ET.Element]]) -> str:
+    """Freeze picture/shape contents while allowing placement and extents.
+
+    Keep blip references, filters, cropping, fills, strokes, text and shapes.
+    Only DrawingML transforms and VML placement CSS are excluded.
+    """
+    from copy import deepcopy
+    vml = "urn:schemas-microsoft-com:vml"
+    placement = {"width", "height", "left", "top", "position", "z-index",
+                 "margin-left", "margin-top", "margin-right", "margin-bottom",
+                 "mso-position-horizontal", "mso-position-horizontal-relative",
+                 "mso-position-vertical", "mso-position-vertical-relative"}
+    rows = []
+    for name, root in parts:
+        for e in root.iter():
+            if e.tag == q(A, "graphic"):
+                rows.append((name, stable_elem(e, drop_descendants={"xfrm"})))
+            elif e.tag == q(W, "pict"):
+                picture = deepcopy(e)
+                for node in picture.iter():
+                    if node.tag.startswith("{" + vml + "}") and "style" in node.attrib:
+                        kept = []
+                        for css in node.attrib["style"].split(";"):
+                            if not css.strip():
+                                continue
+                            key, sep, value = css.partition(":")
+                            if not sep or key.strip().lower() not in placement:
+                                kept.append(css.strip())
+                        if kept:
+                            node.set("style", ";".join(sorted(kept)))
+                        else:
+                            node.attrib.pop("style", None)
+                rows.append((name, stable_elem(picture)))
+    return sha(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def styles_without_pagination(parts: list[tuple[str, ET.Element]]) -> str:
+    """Allow only pagination flags on existing paragraphs, not font changes."""
+    from copy import deepcopy
+    flags = {q(W, n) for n in ("keepNext", "keepLines", "pageBreakBefore")}
+    rows = []
+    for name, root in parts:
+        for e in root.iter():
+            if e.tag not in {q(W, "pPr"), q(W, "rPr")}:
+                continue
+            item = deepcopy(e)
+            if item.tag == q(W, "pPr"):
+                for child in list(item):
+                    if child.tag in flags:
+                        item.remove(child)
+            if len(item) or item.attrib or (item.text or "").strip():
+                rows.append((name, stable_elem(item)))
+    return sha(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
 def snapshot_docx(path: Path) -> dict:
     with zipfile.ZipFile(path, "r") as z:
         parts = parse_story_parts(z)
         return {
+            "snapshot_version": 2,
             "source": str(path),
             "source_sha256": sha(path.read_bytes()),
             "text_content": collect_text_content(parts),
@@ -197,6 +351,9 @@ def snapshot_docx(path: Path) -> dict:
             "block_structure": block_structure(parts),
             "table_structure": table_structure(parts),
             "table_geometry": table_geometry(parts),
+            "table_appearance": table_appearance(parts, z),
+            "drawing_content": drawing_content(parts),
+            "text_style_without_pagination": styles_without_pagination(parts),
             "drawings": drawings(parts),
             "sections": sections(parts),
             "media": package_hash_group(z, lambda n: n.startswith("word/media/")),
@@ -241,6 +398,27 @@ INVARIANTS = {
 }
 
 
+
+# A layout permission never grants permission to recolor a table or replace an
+# image. Existing scopes and callers remain available.
+for _scope in INVARIANTS:
+    INVARIANTS[_scope].add("table_appearance")
+INVARIANTS["image-layout"].update({"media", "relationships", "drawing_content"})
+INVARIANTS["figure-pagination"] = {
+    "text_content", "text_style_without_pagination", "block_structure",
+    "table_structure", "table_geometry", "table_appearance", "drawings",
+    "sections", "media", "relationships",
+}
+
+
+def changed_invariants(baseline: dict, candidate: dict, scope: str) -> list[str]:
+    if scope not in INVARIANTS:
+        raise ValueError(f"unsupported scope: {scope}")
+    # Old/malformed snapshots must be regenerated, not treated as PASS.
+    return [k for k in sorted(INVARIANTS[scope])
+            if k not in baseline or k not in candidate or baseline[k] != candidate[k]]
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     src = Path(args.docx)
     data = snapshot_docx(src)
@@ -257,7 +435,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         return 2
     baseline = json.loads(Path(args.guard).read_text(encoding="utf-8"))
     candidate = snapshot_docx(Path(args.docx))
-    changed = [k for k in sorted(INVARIANTS[args.scope]) if baseline.get(k) != candidate.get(k)]
+    changed = changed_invariants(baseline, candidate, args.scope)
     if changed:
         print(f"FAIL scope={args.scope}")
         for k in changed:

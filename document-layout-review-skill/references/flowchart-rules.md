@@ -4,18 +4,27 @@
 
 Assume a flowchart is a raster image, screenshot, scanned figure, or embedded picture unless an editable graph specification is explicitly available.
 
-The normal repair path is therefore:
+Being an image is not a reason to redraw. First distinguish defects inside the
+figure from insufficient space on the document page.
+
+For a sound source figure:
 
 ```text
 whole source image
-  -> global semantic understanding
-  -> exact node/edge reconstruction
-  -> semantic consistency audit
-  -> redraw from scratch
-  -> render in target document
-  -> visual comparison against source
-  -> replace only after semantic + visual PASS
+  -> keep original media and visual design
+  -> proportionate placement/size adjustment if needed
+  -> give figure + caption a dedicated page if still crowded
+  -> render and verify readability and surrounding text
 ```
+
+Do not shrink text below readable size to keep the current page count. A dedicated
+page keeps the original paper orientation/margins and keeps the caption with its
+figure. Use pagination flags rather than inserting piles of blank paragraphs.
+
+Only an intrinsic defect that placement/pagination cannot fix, or an explicit
+user redesign request, permits semantic reconstruction and redraw. A clear,
+intentional source diagonal connector is not by itself a defect. Do not guess
+unreadable source text; obtain a clearer source or confirmation.
 
 Read `flowchart-redraw-contract.md` and `flowchart-drawing-standard.md` before reconstructing an image flowchart.
 
@@ -80,9 +89,12 @@ Use:
 python3 scripts/flowchart_audit.py <flowchart.json> --json-out <flowchart-audit.json>
 ```
 
-## Redraw rather than patch
+## Redraw only after the intrinsic-defect gate
 
-When the source is an image, a repair means **generating a new diagram** from the reconstructed graph.
+The rules below apply only after redraw has been justified. They do not prohibit
+proportionate scaling or dedicated-page placement of an otherwise sound image.
+Record the actual defect and why placement/pagination cannot solve it. Rebuild
+from the verified graph without changing the source's good visual design.
 
 Do not:
 
@@ -99,7 +111,13 @@ Do:
 4. route connectors from source boundary to target boundary;
 5. redraw all nodes, labels, arrows, and group boundaries consistently.
 
-Redraw with the standards-aware renderer:
+Preserve the source palette, fills, border style, square/rounded corners, font
+style, grouping and reading direction unless explicitly authorized to change.
+A layout engine's defaults are not a source style. The bundled renderer can
+produce a candidate, but its default palette must not overwrite an existing
+figure. When necessary, use a source-style-capable drawing implementation.
+
+The bundled renderer command is:
 
 ```bash
 python3 scripts/flowchart_redraw.py <flowchart.json> --out-dir <redraw-dir> --engine auto
@@ -145,7 +163,7 @@ Check semantic equivalence before visual polish:
 - loop and merge topology matches;
 - no invented steps or edges appear.
 
-Then check visual quality:
+Then compare the original and new complete figures side by side at comparable display size. Confirm the source style is retained, not merely that the new graph is valid. Check visual quality:
 
 - arrowhead points toward the intended target;
 - connector terminates at the correct node boundary;
@@ -158,6 +176,6 @@ Then check visual quality:
 - nodes do not overlap;
 - branches are visually distinguishable;
 - the diagram is not clipped by the target page;
-- global shrinking does not make text unreadable when re-layout could solve the problem.
+- global shrinking does not make text unreadable when a dedicated page or necessary re-layout could solve the problem.
 
 If the source is ambiguous, do not guess. Preserve the uncertainty and request a clearer source or confirmation.
