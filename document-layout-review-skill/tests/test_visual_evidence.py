@@ -113,18 +113,18 @@ class VisualEvidenceTests(unittest.TestCase):
         self.assertEqual(result['verdict'], 'pass')
         self.assertEqual(result['phase'], 'initial')
 
-    def test_final_two_fresh_blind_requests(self):
+    def test_final_one_fresh_blind_request(self):
         ref = self.run_review(final=True); data = ve.read(ve.checked_file(ref))
-        self.assertEqual([c['role'] for c in data['calls']], ['final-primary', 'final-independent'])
-        self.assertNotEqual(data['calls'][0]['request_id'], data['calls'][1]['request_id'])
-        request = ve.read(ve.checked_file(data['calls'][1]['request']))
+        self.assertEqual([c['role'] for c in data['calls']], ['final-primary'])
+        self.assertEqual(len(data['calls']), 1)
+        request = ve.read(ve.checked_file(data['calls'][0]['request']))
         self.assertNotIn('observation', request)
         self.assertNotIn('previous_result', request)
         self.assertGreater(len(request['images']), len(request['required_view_ids']))
         self.assertEqual(self.validate(ref)['verdict'], 'pass')
 
-    def test_second_review_detecting_defect_blocks(self):
-        result = self.validate(self.run_review('second-fail', final=True))
+    def test_current_final_review_detecting_defect_blocks(self):
+        result = self.validate(self.run_review('fail', final=True))
         self.assertEqual(result['verdict'], 'fail')
         self.assertEqual(result['checks']['text_inside_bounds'], 'fail')
 
@@ -161,8 +161,9 @@ class VisualEvidenceTests(unittest.TestCase):
     def test_semantics_mismatch_fails(self):
         self.assertEqual(self.validate(self.run_review('semantic-mismatch', final=True))['verdict'], 'fail')
 
-    def test_classification_disagreement_fails(self):
-        self.assertEqual(self.validate(self.run_review('type-disagreement', final=True))['verdict'], 'fail')
+    def test_invalid_classification_rejected(self):
+        with self.assertRaises(ve.VisualError):
+            ve.evaluate({'request_id':'same','image_type':'invalid','observation':'x'}, {'request_id':'same'})
 
     def test_stale_candidate_binding_rejected(self):
         ref = self.run_review()
@@ -174,13 +175,13 @@ class VisualEvidenceTests(unittest.TestCase):
         with self.assertRaises(ve.VisualError):
             self.validate(self.run_review(), phase='final')
 
-    def test_reused_request_id_rejected(self):
+    def test_forged_request_id_rejected(self):
         ref = self.run_review(final=True)
-        ref = self.revise(ref, lambda d: d['calls'][1].update(request_id=d['calls'][0]['request_id']))
-        with self.assertRaisesRegex(ve.VisualError, '复用'):
+        ref = self.revise(ref, lambda d: d['calls'][0].update(request_id='forged-id'))
+        with self.assertRaises(ve.VisualError):
             self.validate(ref)
 
-    def test_missing_second_pass_rejected(self):
+    def test_missing_final_call_rejected(self):
         ref = self.revise(self.run_review(final=True), lambda d: d['calls'].pop())
         with self.assertRaises(ve.VisualError):
             self.validate(ref)
@@ -278,3 +279,5 @@ class VisualEvidenceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+# DLR_SINGLE_FINAL_TESTS

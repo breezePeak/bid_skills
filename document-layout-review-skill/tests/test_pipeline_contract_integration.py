@@ -51,6 +51,8 @@ class GateIntegrationTests(TemporaryTest):
             'template_table_style':module('template_table_style',audit=lambda *a:{'status':'passed','issues':[]})}
         ctx=patch.dict(sys.modules,self.doubles);ctx.start();self.addCleanup(ctx.stop)
         self.pipeline=load('review_pipeline');self.release=load('finalize_review')
+        block_boundary=patch('block_progress.validate_final_binding',return_value={});block_boundary.start();self.addCleanup(block_boundary.stop)
+        render_boundary=patch.object(self.release,'validate_render',return_value={'status':'passed','engine':'explicit-render-test-double'});render_boundary.start();self.addCleanup(render_boundary.stop)
 
     def save_json(self,path,data):path.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');return path
 
@@ -112,7 +114,7 @@ class GateIntegrationTests(TemporaryTest):
         source=self.document();template=self.document('template.docx',None);profile=self.save_json(self.root/'style.json',{})
         argv=['review_pipeline.py',str(source),'--template',str(template),'--template-style-json',str(profile),'--work-dir',str(self.root/'work')]
         original=source.read_bytes()
-        with patch.object(sys,'argv',argv),patch.object(self.pipeline,'runtime_check',side_effect=env.PreflightError('word-engine-unavailable','test')),patch.object(self.pipeline,'make_review_template') as images,patch.object(self.pipeline,'run_script') as repairs,redirect_stdout(io.StringIO()):
+        with patch.object(sys,'argv',argv),patch.object(env,'check',side_effect=env.PreflightError('word-engine-unavailable','test')),patch.object(self.pipeline,'make_review_template') as images,patch.object(self.pipeline,'run_script') as repairs,redirect_stdout(io.StringIO()):
             self.assertEqual(self.pipeline.main(),2)
             images.assert_not_called();repairs.assert_not_called()
         self.assertEqual(source.read_bytes(),original)
@@ -179,3 +181,5 @@ class CaptionContractTests(TemporaryTest):
 
 
 if __name__=='__main__':unittest.main()
+
+# DLR_BLOCK_INTEGRATION_TESTS

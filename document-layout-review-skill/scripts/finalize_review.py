@@ -35,6 +35,8 @@ def review_findings(value):
 def validate_release(manifest, visual):
     m=read(manifest) if not isinstance(manifest,dict) else manifest
     v=read(visual) if not isinstance(visual,dict) else visual
+    from block_progress import validate_final_binding
+    validate_final_binding(m)
     if m.get('version')!=5 or m.get('status')!='awaiting_visual_review':
         raise PolicyError('manifest-not-ready','必须使用新版完整验收流水线，不能用中间状态或旧清单交付。')
     candidate=Path(m['candidate']);source=Path(m['source'])
@@ -100,7 +102,9 @@ def validate_release(manifest, visual):
             checked_file(m.get('image_discovery_ledger'))
     except VisualError as exc:
         raise PolicyError(exc.code,str(exc),**exc.details) from exc
-    image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages,m.get('image_discovery_ledger'))
+    image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages,m.get('image_discovery_ledger'),v.get('pages'))
+    from block_evidence import validate_table_coverage
+    validate_table_coverage(candidate,v,pages)
     outstanding=review_findings(gate_map['table-layout']);decisions=v.get('table_reviews',[])
     if not isinstance(decisions,list) or len(decisions)!=len(outstanding) or {r.get('issue_sha256') for r in decisions}!=set(outstanding):
         raise PolicyError('table-review-missing','表格语义 review 候选未逐项说明是否需要合并或保留。',expected=list(outstanding))
@@ -148,3 +152,5 @@ def main():
 
 
 if __name__=='__main__':raise SystemExit(main())
+
+# DLR_BLOCK_WORKFLOW_V2

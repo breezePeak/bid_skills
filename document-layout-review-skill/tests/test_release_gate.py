@@ -14,6 +14,14 @@ from review_pipeline import REQUIRED_GATES, write_json
 class ReleaseGate(FigureGate):
     def setUp(self):
         super().setUp()
+        for boundary in [
+            patch('block_progress.validate_final_binding',return_value={}),
+            patch('figure_inspection.verify_row',return_value={}),
+            patch('figure_inspection.late_findings',return_value={'issue_ids':[],'authorizes_change':False}),
+            patch.object(g,'validate_render',return_value={'status':'passed','engine':'explicit-render-test-double'}),
+        ]:
+            boundary.start();self.addCleanup(boundary.stop)
+
         # The release contract now requires an actual table template, not a
         # synthetic template containing headings only.
         from docx import Document
@@ -37,11 +45,25 @@ class ReleaseGate(FigureGate):
             # Synthetic gate metadata fixtures; no claim that Word executed here.
             if ident=='field-update':result={'status':'passed','engine':'Microsoft Word','fields_updated':True,'indexes_updated':True,'errors':[],'output_sha256':n.file_digest(self.out)}
             write_json(report,result);gates.append({'id':ident,'passed':True,'report':str(report),'report_sha256':n.file_digest(report)})
-        m={'version':4,'status':'awaiting_visual_review','candidate':str(self.out),'candidate_sha256':n.file_digest(self.out),
+        m={'version':5,'status':'awaiting_visual_review','candidate':str(self.out),'candidate_sha256':n.file_digest(self.out),
            'source':str(self.source),'source_sha256':n.file_digest(self.source),'template':str(self.template),'template_sha256':n.file_digest(self.template),
            'template_style_json':str(style),'template_style_sha256':n.file_digest(style),'initial_visual_review':str(initial),'initial_visual_review_sha256':n.file_digest(initial),
            'gates':gates,'render':{'passed':True,'pages':pages}}
         v={'overall_status':'pass','candidate_sha256':n.file_digest(self.out),'pages':[{'name':p['name'],'sha256':p['sha256'],'status':'pass','observations':'Synthetic test page review.'} for p in pages],'figures':b,'table_reviews':[]}
+        from content_integrity import make_plan
+        for key,filename,data in [
+            ('content_plan','content-plan.json',make_plan(self.source)),
+            ('text_rules','text-rules.json',{}),
+            ('runtime_preflight','runtime-preflight.json',{'status':'passed'}),
+        ]:
+            path=self.root/filename;write_json(path,data);m[key]=str(path)
+            m['text_rules_file_sha256' if key=='text_rules' else key+'_sha256']=n.file_digest(path)
+        discovery=self.root/'image-discoveries.json'
+        write_json(discovery,{'version':1,'source_sha256':m['source_sha256'],'inspections':[]})
+        m['image_discovery_ledger']={'path':str(discovery),'sha256':n.file_digest(discovery)}
+        v['table_objects']=[{'id':o['id'],'object_sha256':o['hash'],'status':'pass','observations':'Explicit synthetic table observation fixture.',
+                            'pages':[{'name':p['name'],'sha256':p['sha256']} for p in pages]}
+                           for o in n.inventory(n.Doc(self.out)) if o['kind']=='table']
         return m,v
     def test_complete_contract_passes(self):
         m,v=self.bundle();self.assertEqual(g.validate_release(m,v)['status'],'passed')
@@ -114,3 +136,5 @@ class ReleaseGate(FigureGate):
 
 def load_tests(loader, tests, pattern):
     return unittest.TestSuite(ReleaseGate(name) for name in ReleaseGate.__dict__ if name.startswith('test_'))
+
+# DLR_BLOCK_RELEASE_TESTS

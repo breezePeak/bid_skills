@@ -33,7 +33,7 @@ def _visual(action, *args, **kwargs):
         raise PolicyError(exc.code, str(exc), **exc.details) from exc
 
 
-def make_review_template(source, out_dir):
+def make_review_template(source, out_dir, prepare_views=False):
     source, out_dir = Path(source), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = Doc(source); items = []
@@ -48,8 +48,9 @@ def make_review_template(source, out_dir):
         from figure_inspection import binding
         task = None; preparation_issue = None
         try:
-            task = prepare([r['path'] for r in extracted], out_dir / obj['id'],
-                           binding(source, source, obj, doc), phase='initial')
+            if prepare_views:
+                task = prepare([r['path'] for r in extracted], out_dir / obj['id'],
+                               binding(source, source, obj, doc), phase='initial')
         except VisualError as exc:
             preparation_issue = exc.as_issue()
         items.append({'id': obj['id'], 'object_sha256': obj['hash'],
@@ -59,7 +60,7 @@ def make_review_template(source, out_dir):
                       'source_files': extracted, 'context': obj['context'],
                       'caption_outside_image': obj['caption'] is not None})
     return {'version': 2, 'source_sha256': file_digest(source), 'objects': items,
-            'instruction': '使用 inspect-initial 调用宿主视觉审查器，真实读取完整图、重叠局部和四周条带。程序汇总结果，不手填 PASS；终检需两次盲检及最新所在页。无审查器保持待检查，不能放行。'}
+            'instruction': '使用 inspect-initial 调用宿主视觉审查器，真实读取完整图、重叠局部和四周条带。程序汇总结果，不手填 PASS；终检检查当前图及最新所在页；相同图像和页面证据可复用。无审查器保持待检查，不能放行。'}
 
 
 def indexed(rows, actual):
@@ -110,7 +111,7 @@ def validate_initial(source, report):
     return rows
 
 
-def validate_final(source, candidate, initial_report, final_report, pages, discoveries=None):
+def validate_final(source, candidate, initial_report, final_report, pages, discoveries=None, page_reviews=None):
     initial = validate_initial(source, initial_report)
     data = load(final_report)
     if data.get('source_sha256') != file_digest(source) or data.get('candidate_sha256') != file_digest(candidate):
@@ -128,8 +129,14 @@ def validate_final(source, candidate, initial_report, final_report, pages, disco
         if row.get('image_type') != old['image_type']:
             raise PolicyError('image-type-changed', '不得把有缺陷的架构图改称照片/装饰图而豁免检查。', object_id=ident)
         from figure_inspection import verify_row, late_findings
-        _visual(verify_row, source, candidate, obj, row, doc, phase='final', pages=pages, original_row=old)
-        late = _visual(late_findings, source, row, old['object_sha256'], obj['hash'], discoveries, old['inspection'])
+        if row.get('content_review'):
+            from block_evidence import reuse_source_content
+            if not _visual(reuse_source_content,source,candidate,obj,row,doc,old,pages,page_reviews,discoveries,validate=True):
+                raise PolicyError('figure-reuse-invalid','图内结论不可复用，必须检查实际修改后的图。',object_id=ident)
+            late = {'issue_ids':[],'authorizes_change':False}
+        else:
+            _visual(verify_row, source, candidate, obj, row, doc, phase='final', pages=pages, original_row=old)
+            late = _visual(late_findings, source, row, old['object_sha256'], obj['hash'], discoveries, old['inspection'])
         validate_checks(row, final=True)
         actual_failed = {k for k, v in old['checks'].items() if v == 'fail'}
         closed = row.get('resolved_initial_defects', [])
@@ -150,7 +157,7 @@ def validate_final(source, candidate, initial_report, final_report, pages, disco
             if ref.get('name') not in expected_pages or expected_pages[ref['name']] != ref.get('sha256'):
                 raise PolicyError('image-final-page-stale', '图片对应的最终页截图不匹配。', object_id=ident)
     return {'status': 'passed', 'figure_count': len(actual), 'initial_defects_closed': sum(sum(v == 'fail' for v in r['checks'].values()) for r in initial.values()),
-            'note': '已核对真实像素输入、完整/局部/边缘覆盖、两次终检调用及初检/后续缺陷闭环。视觉判断仍由所接入的视觉模型承担；不是 OCR 或零漏检保证。'}
+            'note': '已核对真实像素输入、完整/局部/边缘覆盖、当前终检调用或经过校验的同像素证据及初检/后续缺陷闭环。视觉判断仍由所接入的视觉模型承担；不是 OCR 或零漏检保证。'}
 
 
 def main():
@@ -171,7 +178,8 @@ def main():
         elif a.command == 'initial': result = {'status': 'passed', 'figure_count': len(validate_initial(a.source, a.review))}
         elif a.command == 'final':
             m = load(a.manifest)
-            result = validate_final(a.source, a.candidate, a.initial_review, a.final_review, m['render']['pages'], m.get('image_discovery_ledger'))
+            report = load(a.final_review)
+            result = validate_final(a.source,a.candidate,a.initial_review,report.get('figures',report),m['render']['pages'],m.get('image_discovery_ledger'),report.get('pages'))
         elif a.command == 'bind-rendered':
             from figure_inspection import bind_rendered
             result = _visual(bind_rendered, a.source, a.review, a.render_report, a.locations)
@@ -189,3 +197,5 @@ def main():
 
 
 if __name__ == '__main__': raise SystemExit(main())
+
+# DLR_BLOCK_WORKFLOW_V2

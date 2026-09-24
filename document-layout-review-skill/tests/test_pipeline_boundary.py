@@ -12,26 +12,28 @@ import review_pipeline as pipeline
 class PipelineBoundary(Fixtures):
     def invoke(self,*args):
         stream=io.StringIO()
-        with patch.object(sys,'argv',['review_pipeline.py',*map(str,args)]),contextlib.redirect_stdout(stream):
+        with patch('runtime_preflight.check', return_value={'status':'passed'}),patch.object(sys,'argv',['review_pipeline.py',*map(str,args)]),contextlib.redirect_stdout(stream):
             rc=pipeline.main()
         return rc,json.loads(stream.getvalue())
-    def test_actual_image_review_required_before_legacy_mutation(self):
+    def test_startup_prepares_blocks_without_global_image_calls(self):
         self.sample();before=self.source.read_bytes();work=self.root/'work'
         code,result=self.invoke(self.source,'--work-dir',work)
-        self.assertEqual(code,4);self.assertEqual(result['status'],'requires_image_review')
+        self.assertEqual(code,0);self.assertEqual(result['status'],'global_setup')
         self.assertFalse((work/'candidate.docx').exists());self.assertEqual(before,self.source.read_bytes())
-        review=json.loads(Path(result['review']).read_text())
+        state=json.loads((work/'block-state.json').read_text());review=json.loads(Path(state['initial_review']).read_text())
         self.assertEqual(len(review['objects']),2)
         self.assertTrue(all('pending' in x['checks'].values() for x in review['objects']))
-    def test_input_in_reserved_stage_path_is_not_overwritten(self):
+    def test_legacy_candidate_filename_is_preserved_as_input(self):
         self.sample();work=self.root/'work';work.mkdir();source=work/'candidate.docx';source.write_bytes(self.source.read_bytes());before=source.read_bytes()
         code,result=self.invoke(source,'--work-dir',work)
-        self.assertEqual(code,2);self.assertEqual(result['issues'][0]['code'],'input-output-collision')
+        self.assertEqual(code,0);self.assertEqual(result['status'],'global_setup')
         self.assertEqual(before,source.read_bytes())
-    def test_audit_only_requires_real_original_file(self):
+    def test_audit_only_cannot_skip_unfinished_blocks(self):
         self.sample();code,result=self.invoke(self.source,'--work-dir',self.root/'work','--audit-only')
-        self.assertEqual(code,2);self.assertEqual(result['issues'][0]['code'],'input-missing')
+        self.assertEqual(code,2);self.assertEqual(result['status'],'blocked')
 
 
 def load_tests(loader, tests, pattern):
     return unittest.TestSuite(PipelineBoundary(name) for name in PipelineBoundary.__dict__ if name.startswith('test_'))
+
+# DLR_BLOCK_BOUNDARY_TESTS

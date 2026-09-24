@@ -38,9 +38,14 @@ def load_json(path):
     except (OSError,ValueError,TypeError):return None
 
 
-def run_script(name,*args,allow=(0,)):
+def _run_script_uncached(name,*args,allow=(0,)):
     cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False,timeout=900 if name=='render_docx.py' else 300)
     return {'ok':cp.returncode in allow,'returncode':cp.returncode,'stdout':cp.stdout,'stderr':cp.stderr}
+
+
+def run_script(name,*args,allow=(0,)):
+    from block_cache import cached_run
+    return cached_run(name,args,HERE,lambda n,*a:_run_script_uncached(n,*a,allow=allow))
 
 
 def resolve_template(args,reports):
@@ -114,7 +119,7 @@ def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,obje
     return gates
 
 
-def main():
+def _audit_only_main():
     ap=argparse.ArgumentParser(description='按模板修复并执行不可缺项的图表/字段验收流程')
     ap.add_argument('input',type=Path);ap.add_argument('--work-dir',type=Path,required=True)
     ap.add_argument('--template',type=Path);ap.add_argument('--template-style-json',type=Path)
@@ -128,6 +133,8 @@ def main():
     ap.add_argument('--uno-python',help='可导入 uno 的 Python；不指定时自动探测')
     ap.add_argument('--content-plan',type=Path,help='继续验收时沿用原始文件绑定的内容保护计划')
     args=ap.parse_args()
+    if not args.audit_only:
+        ap.error('整本批量修复入口已停用；请通过分块入口推进，最后只审计。')
     for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','vision_worker_config','source','field_update_report','content_plan'):
         val=getattr(args,key)
         if val is not None:setattr(args,key,val.resolve())
@@ -287,4 +294,11 @@ def main():
         write_json(reports/'pipeline-failure.json',result);print(json.dumps(result,ensure_ascii=False,indent=2));return 2
 
 
+def main():
+    from block_workflow import main as block_main
+    return block_main()
+
+
 if __name__=='__main__':raise SystemExit(main())
+
+# DLR_BLOCK_WORKFLOW_V2

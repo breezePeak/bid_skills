@@ -2,8 +2,8 @@
 """Prepare real pixels, call a configured vision worker, and validate its evidence.
 
 No OCR and no automatic PASS. A command worker consumes JSON on stdin and returns
-JSON on stdout. It must actually call a vision-capable model/subagent. Two final
-requests are separate and blind to each other's answers. Receipts protect against
+JSON on stdout. It must actually call a vision-capable model/subagent. Final review uses one fresh call; unchanged evidence can be reused only
+when current image and page hashes match. Receipts protect against
 omission/stale evidence, not a malicious process with write access to this folder.
 """
 from __future__ import annotations
@@ -27,8 +27,8 @@ CHECKS = ('text_inside_bounds', 'no_overlap', 'readable', 'not_clipped',
           'connections_correct', 'no_embedded_caption')
 INTRINSIC = {'text_inside_bounds', 'no_overlap', 'connections_correct', 'no_embedded_caption'}
 IMAGE_TYPES = {'diagram', 'photo', 'decoration'}
-ROLES = {'initial': ('initial',), 'final': ('final-primary', 'final-independent')}
-PROTOCOL = 'dlr-visual-v1'
+ROLES = {'initial': ('initial',), 'final': ('final-primary',)}
+PROTOCOL = 'dlr-visual-v2'
 
 
 class VisualError(ValueError):
@@ -370,9 +370,9 @@ def validate_inspection(ref, expected=None, *, phase=None, allow_test_double=Fal
     roles = ROLES[bundle['phase']]
     calls = data.get('calls')
     if not isinstance(calls, list) or len(calls) != len(roles) or [c.get('role') for c in calls] != list(roles):
-        raise VisualError('visual-independent-review-missing', '初检需一次真实调用，终检需两次各自从零检查的独立调用。')
+        raise VisualError('visual-independent-review-missing', '初检按当前块执行一次；终检执行一次当前对象检查。')
     if len({c.get('request_id') for c in calls}) != len(roles):
-        raise VisualError('visual-reused-call', '两次终检不能复用同一次视觉调用。')
+        raise VisualError('visual-reused-call', '不同检查任务不得复用伪造的请求 ID。')
     results = []
     for call in calls:
         if call.get('returncode') != 0:
@@ -437,3 +437,5 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+# DLR_BLOCK_WORKFLOW_V2

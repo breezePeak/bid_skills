@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "base_commit": "0b476a7bda9d930effd1c68ba0bb447502194f5c",
+  "files": {
+    "scripts/review_pipeline.py": "f99ce41347a0b838e89e16adcd4ba99a4c647d8abce545f7e728712472e3b64f",
+    "scripts/finalize_review.py": "27ce6676ddfffcf903e456c115bdb6b3521cb142563c5ff3045f5610c904249b",
+    "scripts/visual_evidence.py": "49fd538ac5a20ab3933c8e3d019d5f76d047b9a417ad095f6fbe7b6b20369294",
+    "scripts/figure_inspection.py": "bed78cf82541d31e8dfa4cd8d00045224b0562cc72a865583dcaca7e5c9ea083",
+    "scripts/figure_review.py": "3dfa36ce84468ae9ad140802a529bb41300140bf7fe3a5324fdab5383332cf3c",
+    "README.md": "2759a446154444aadb3dce4f7b737bbdbc52ff754de5adb2f87d5a7ffbae1cc2",
+    "SKILL.md": "f29ac4a807d5e50cdeeea43588efa8f2fa8b5a06f39150f6a09c72f67ea051f9",
+    "references/acceptance-checklist.md": "99eebdc94e7512d886c08f2f8af6b39a272dae81c4882a71ea667ed4c4c78476",
+    "references/caption-and-image-review.md": "1f9203de9cec5469a77a68e6d554cac37eb967d0e8862b21282b0e5b76fe59c7",
+    "references/execution-and-resume.md": "9fd8ff7035707787bfbbd87d4fddb574ee33f81e332c53d0d3517fb2a525daff",
+    "references/mutation-scope-contract.md": "266c6e2a3d07d4d4293f4414321adf5b858927491ec109a335b5d207dfdee197",
+    "references/release-gate.md": "3b8eb96b9eba1a020ad1abed0b51cf734ca65f568645f0515b6f303d55ea6854",
+    "references/repair-playbook.md": "3a058ddb179da05610a3aef2c6888842cc1d78397fd5a0beef4222d5f2966364",
+    "references/visual-inspection.md": "85e8b1f9c4d3cd328a45c5df0b06125828cec86627f7d07d7e0df0d3e6abc4c2",
+    "scripts/block_cache.py": "e6da7aac02fd93fcbda933e2097733a80061fec10da453d72e332715a4661371",
+    "scripts/block_evidence.py": "5c8e796a08d7f9d5a49c0a826586b7706cee8a6d09aaee0f58d51bd64a1dcc4e",
+    "scripts/block_progress.py": "063112149b807e6971d668963f6cdc6a3007037fca238a3a59aea48735c4badf",
+    "scripts/block_workflow.py": "351f2b8e85fa65bed0921cba03102cdf45283a7b8bbce6f6f7437d314005afc2",
+    "tests/smoke_block_50_pages.py": "2c0a46ecbe6ab14d420d1d8b1419a55c97c8f343e5e08284b5293315746df3d3",
+    "tests/test_block_final_flow.py": "cb289f9ba06b83bfbc9e93ef4136e8dfa0f68513120b421b64f7225b4047b4c4",
+    "tests/test_block_progress.py": "03e9e09d90d36fdd9627bcdb566a6966a9c6ebb10a561ed1df9121a66e4d8f9e",
+    "tests/test_block_workflow_v2.py": "5cf985091f39287b23eed49d3d561ef2d77769ffcd5196e8d5dde542bdcbdb25",
+    "tests/test_visual_evidence.py": "aee54a03852d8d2524ba55831a0231d4c8b896683a2f46a6715e81e0b7fbc110",
+    "tests/test_pipeline_boundary.py": "cd9e4df2c871f45d06ad0fb1a111822deaf7af3719411961485e0c482507b6a5",
+    "tests/test_release_gate.py": "e22bd3780b6fbed56ebde3af34f6870b99f24ee3df61576ea61a6fff645db9a8",
+    "tests/test_pipeline_contract_integration.py": "2ec996e7e8c4c7a978aac14ec264a2f2e49d76333858916b2cebbb3cbaefd1e8"
+  }
+}

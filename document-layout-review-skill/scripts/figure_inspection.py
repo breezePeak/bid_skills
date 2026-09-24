@@ -121,8 +121,9 @@ def _assert_pixels(doc, obj, bundle, pages, current, row):
 def verify_row(source, current, obj, row, doc, *, phase, pages=(), original_row=None):
     selected = _page_refs(row, pages) if phase == 'final' else (_rendered_pixels(current, row)[1] if row.get('rendered_view') else [])
     expected = binding(source, current, obj, doc, pages=selected, rendered_view=row.get('rendered_view'))
-    result = validate_inspection(row.get('inspection'), expected, phase=phase)
-    bundle = validate_bundle(result['bundle'], expected)
+    from block_evidence import validate_bound_inspection
+    result = validate_bound_inspection(row, expected, phase=phase)
+    bundle = validate_bundle(result['bundle'], result['binding'])
     _assert_pixels(doc, obj, bundle, selected, current, row)
     if phase == 'final':
         original_result = validate_inspection(original_row.get('inspection'), phase='initial')
@@ -229,14 +230,25 @@ def _apply_result(row, ref):
     return result
 
 
-def inspect_initial(source, review, config, out_dir):
+def inspect_initial(source, review, config, out_dir, object_ids=None):
     data = copy.deepcopy(review if isinstance(review, dict) else read(review))
     doc = _doc(source)
     objects = _figures(doc)
     if data.get('source_sha256') != file_sha(source) or {r.get('id') for r in data.get('objects', [])} != {o['id'] for o in objects}:
         raise VisualError('initial-image-review-stale', '初检清单与原始 Word 不匹配。')
     rows = {r['id']: r for r in data['objects']}
+    selected_ids = set(rows) if object_ids is None else set(object_ids)
+    if not selected_ids <= set(rows):
+        raise VisualError('unknown-image', '当前块包含未知图片 ID。')
     for obj in objects:
+        if obj['id'] not in selected_ids:
+            continue
+        if rows[obj['id']].get('inspection'):
+            try:
+                verify_row(source, source, obj, rows[obj['id']], doc, phase='initial')
+                continue
+            except VisualError:
+                pass
         root = Path(out_dir) / obj['id']
         row = rows[obj['id']]
         assets = _extract(doc, obj, root, source, row)
@@ -246,7 +258,7 @@ def inspect_initial(source, review, config, out_dir):
         if result['verdict'] == 'uncertain':
             data['status'] = 'requires_visual_review'
     data['version'] = 2
-    data.setdefault('status', 'inspected')  # initial FAILs are defects to repair, not execution failures.
+    data['status'] = 'inspected' if all(r.get('inspection') and all(v not in {'pending','uncertain'} for v in r.get('checks',{}).values()) for r in data['objects']) else 'requires_visual_review'
     return data
 
 
@@ -274,6 +286,20 @@ def inspect_final(source, candidate, initial, visual, manifest, config, out_dir)
     any_failure = False
     for obj in objects:
         row = rows[obj['id']]
+        from block_evidence import reuse_source_content
+        if reuse_source_content(source,candidate,obj,row,doc,old[obj['id']],m['render']['pages'],data.get('pages'),reference(discovery_path)):
+            if not isinstance(visual,dict):
+                write(visual,data)
+            continue
+        row.pop('content_review',None)
+        if row.get('inspection'):
+            try:
+                verify_row(source, candidate, obj, row, doc, phase='final', pages=m['render']['pages'], original_row=old[obj['id']])
+                late_findings(source, row, old[obj['id']]['object_sha256'], obj['hash'], reference(discovery_path), old[obj['id']]['inspection'])
+                continue
+            except VisualError:
+                pass
+        row.pop('reuse', None)
         root = Path(out_dir) / obj['id']
         assets = _extract(doc, obj, root, candidate, row)
         selected = _page_refs(row, m['render']['pages'])
@@ -308,8 +334,12 @@ def inspect_final(source, candidate, initial, visual, manifest, config, out_dir)
         # Save after each object so a later timeout cannot lose a newly found defect.
         if not isinstance(manifest, dict):
             write(manifest, m)
+        if not isinstance(visual, dict):
+            write(visual, data)
     data['figures']['version'] = 2
     data['figure_inspection_status'] = 'fail' if any_failure else 'pass'
     # This does NOT mark the whole document accepted; page/table checks remain mandatory.
     data['overall_status'] = 'fail' if any_failure else 'pending'
     return data
+
+# DLR_BLOCK_WORKFLOW_V2
