@@ -12,6 +12,8 @@ from template_caption_policy import audit_document
 from figure_review import validate_final
 from field_refresh import validate_report
 from review_pipeline import REQUIRED_GATES
+from render_docx import validate_render
+from office_backends import OfficeError
 
 
 def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
@@ -53,7 +55,7 @@ def validate_release(manifest, visual):
             raise PolicyError('gate-report-stale','审计报告缺失或被修改。',gate=gate['id'])
         gate_map[gate['id']]=read(report)
     validated_field=validate_report(candidate,gate_map['field-update'])
-    required={'word':'Microsoft Word','libreoffice':'LibreOffice UNO'}.get(m.get('field_engine_requested','auto'))
+    required={'word':'Microsoft Word','wps':'WPS Writer','libreoffice':'LibreOffice UNO'}.get(m.get('field_engine_requested','auto'))
     if required and validated_field.get('engine')!=required:
         raise PolicyError('field-engine-mismatch','实际域更新引擎与明确要求不一致。',expected=required,actual=validated_field.get('engine'))
     for path_key,hash_key in [('template','template_sha256'),('template_style_json','template_style_sha256'),('initial_visual_review','initial_visual_review_sha256'),('content_plan','content_plan_sha256'),('text_rules','text_rules_file_sha256'),('runtime_preflight','runtime_preflight_sha256')]:
@@ -62,6 +64,10 @@ def validate_release(manifest, visual):
     render=m.get('render') or {};pages=render.get('pages') or []
     if render.get('passed') is not True or not pages or len(pages)!=len({p.get('name') for p in pages}):
         raise PolicyError('render-missing','必须渲染最新文件，且页面列表不能空或重复。')
+    try:
+        renderer_result=validate_render(candidate,render.get('data'),m.get('renderer_requested','auto'),pages)
+    except OfficeError as exc:
+        raise PolicyError(exc.code,str(exc),**exc.details) from exc
     expected={p['name']:p for p in pages};rows=v.get('pages')
     if not isinstance(rows,list) or len(rows)!=len(expected) or {p.get('name') for p in rows}!=set(expected):
         raise PolicyError('page-review-incomplete','最终页面没有逐页完整检查。')
@@ -96,7 +102,7 @@ def validate_release(manifest, visual):
         if row.get('decision') not in {'keep_separate','acceptable'} or not str(row.get('reason','')).strip():
             raise PolicyError('table-review-unresolved','表格 review 未解决；需要修改的对象须先修复并重跑审计。')
     return {'status':'passed','candidate':str(candidate),'candidate_sha256':m['candidate_sha256'],
-            'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked,'table_template_recheck':table_checked,'final_rechecks':rechecks}
+            'renderer':renderer_result,'page_count':len(pages),'figures':image_result,'heading_caption_recheck':checked,'table_template_recheck':table_checked,'final_rechecks':rechecks}
 
 
 def finalize(manifest,visual,out):
@@ -107,6 +113,9 @@ def finalize(manifest,visual,out):
         if m.get(key):protected.add(Path(m[key]).resolve())
     for gate in m.get('gates',[]):protected.add(Path(gate['report']).resolve())
     for page in (m.get('render') or {}).get('pages',[]):protected.add(Path(page['path']).resolve())
+    for key in ('pdf','report_path'):
+        value=((m.get('render') or {}).get('data') or {}).get(key)
+        if value:protected.add(Path(value).resolve())
     if not isinstance(manifest,dict):protected.add(Path(manifest).resolve())
     if not isinstance(visual,dict):protected.add(Path(visual).resolve())
     if out.resolve() in protected:raise PolicyError('output-collision','交付文件路径不能覆盖候选、原始 Word 或模板。')

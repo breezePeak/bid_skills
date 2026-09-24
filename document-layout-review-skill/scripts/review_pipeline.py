@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from render_docx import validate_render
 from numbering_policy import Doc, PolicyError, file_digest, inventory, public_inventory
 from figure_review import make_review_template, validate_initial
 from field_refresh import refresh, validate_report, safe_fields
@@ -37,7 +38,7 @@ def load_json(path):
 
 
 def run_script(name,*args,allow=(0,)):
-    cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False,timeout=300)
+    cp=subprocess.run([sys.executable,str(HERE/name),*map(str,args)],capture_output=True,text=True,check=False,timeout=900 if name=='render_docx.py' else 300)
     return {'ok':cp.returncode in allow,'returncode':cp.returncode,'stdout':cp.stdout,'stderr':cp.stderr}
 
 
@@ -119,7 +120,8 @@ def main():
     ap.add_argument('--text-rules',type=Path);ap.add_argument('--numbering-plan',type=Path);ap.add_argument('--object-plan',type=Path)
     ap.add_argument('--initial-visual-review',type=Path)
     ap.add_argument('--audit-only',action='store_true');ap.add_argument('--source',type=Path,help='audit-only 时必须指向原始 Word，而不是修改后的候选')
-    ap.add_argument('--field-engine',choices=['auto','word','libreoffice'],default='auto')
+    ap.add_argument('--field-engine',choices=['auto','word','wps','libreoffice'],default='auto')
+    ap.add_argument('--renderer',choices=['auto','word','wps','libreoffice'],default='auto')
     ap.add_argument('--field-update-report',type=Path,help='audit-only 时已更新域候选的引擎报告')
     ap.add_argument('--uno-python',help='可导入 uno 的 Python；不指定时自动探测')
     ap.add_argument('--content-plan',type=Path,help='继续验收时沿用原始文件绑定的内容保护计划')
@@ -140,7 +142,7 @@ def main():
         if any((args.work_dir/name).resolve() in {template.resolve(),style_json.resolve()} for name in reserved):
             raise PolicyError('template-output-collision','阶段输出不能覆盖模板或模板约定。')
         preflight=runtime_check(source,template,args.work_dir,requested=args.field_engine,
-                                profile=style_json,audit_only=args.audit_only,uno_python=args.uno_python)
+                                profile=style_json,audit_only=args.audit_only,uno_python=args.uno_python,renderer=args.renderer)
         validate_docx(args.input)
         safe_fields(args.input)
         preflight_file=reports/'runtime-preflight.json';write_json(preflight_file,preflight)
@@ -214,7 +216,7 @@ def main():
         if args.audit_only:
             if args.field_update_report is None:raise PolicyError('field-update-report-missing','继续验收前必须实际更新最后修改后的 Word。')
             field_data=validate_report(candidate,args.field_update_report)
-            required={'word':'Microsoft Word','libreoffice':'LibreOffice UNO'}.get(args.field_engine)
+            required={'word':'Microsoft Word','wps':'WPS Writer','libreoffice':'LibreOffice UNO'}.get(args.field_engine)
             if required and field_data.get('engine')!=required:
                 raise PolicyError('field-engine-mismatch','续跑时的真实域更新引擎不符合明确要求。',expected=required,actual=field_data.get('engine'))
         else:
@@ -224,24 +226,31 @@ def main():
                 shutil.copy2(refreshed,candidate)
             except PolicyError as exc:
                 result={'status':'requires_field_update','candidate':str(candidate),'candidate_sha256':file_digest(candidate),'issues':[exc.as_issue()],
-                        'next':'使用真实 Word 更新域，或在具备 Word 的宿主执行 field_refresh.py；随后 --audit-only 检查，不能将此候选当已验收成果。'}
+                        'next':'修复实际引擎错误后执行 field_refresh.py（默认 Word→WPS→LibreOffice，明确指定时不降级）；随后 --audit-only 检查，不能将此候选当已验收成果。'}
                 write_json(args.work_dir/'review-manifest.json',result)
                 print(json.dumps(result,ensure_ascii=False,indent=2));return 4
         field_report=reports/'field-update.json';write_json(field_report,field_data)
         gates=check_gates(candidate,template,style_json,rules_file,rules_hash,reports,object_plan,initial,source,field_report,content_plan)
-        render_run=run_script('render_docx.py',candidate,'--out-dir',render_dir)
-        try:render_data=json.loads(render_run['stdout']) if render_run['ok'] else {}
+        render_run=run_script('render_docx.py',candidate,'--out-dir',render_dir,'--renderer',args.renderer)
+        try:render_data=json.loads(render_run['stdout'])
         except ValueError:render_data={}
         pages=[{'path':str(Path(p).resolve()),'name':Path(p).name,'sha256':file_digest(Path(p))} for p in render_data.get('pages',[]) if Path(p).is_file()]
-        ok=all(g['passed'] for g in gates) and bool(render_run['ok'] and pages)
-        manifest={'version':5,'field_engine_requested':args.field_engine,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
+        render_valid = False
+        if render_run['ok'] and pages:
+            try:
+                validate_render(candidate,render_data,args.renderer,pages)
+                render_valid = True
+            except Exception as exc:
+                render_data['validation_error'] = exc.as_issue() if hasattr(exc,'as_issue') else {'message':str(exc)}
+        ok=all(g['passed'] for g in gates) and render_valid
+        manifest={'version':5,'renderer_requested':args.renderer,'field_engine_requested':args.field_engine,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
                   'candidate':str(candidate.resolve()),'candidate_sha256':file_digest(candidate),'template':str(template.resolve()),'template_sha256':file_digest(template),
                   'template_style_json':str(style_json.resolve()),'template_style_sha256':file_digest(style_json),
                   'text_rules':str(rules_file.resolve()),'text_rules_sha256':rules_hash,'text_rules_file_sha256':file_digest(rules_file),
                   'content_plan':str(content_plan.resolve()),'content_plan_sha256':file_digest(content_plan),
                   'runtime_preflight':str(preflight_file.resolve()),'runtime_preflight_sha256':file_digest(preflight_file),'object_plan':str(object_plan.resolve()) if object_plan else None,
                   'initial_visual_review':str(initial.resolve()),'initial_visual_review_sha256':file_digest(initial),'stages':stages,'gates':gates,
-                  'render':{'passed':bool(render_run['ok'] and pages),'run':render_run,'data':render_data,'pages':pages},
+                  'render':{'passed':render_valid,'run':render_run,'data':render_data,'pages':pages},
                   'next':'Agent 逐张对照原图/新图并逐页终检。初检出框、重叠、内嵌题注等缺陷必须关闭；只改报告不能放行。最后使用 finalize_review.py。'}
         write_json(args.work_dir/'review-manifest.json',manifest)
         final_template={'overall_status':'pending','candidate_sha256':file_digest(candidate),'pages':[{'name':p['name'],'sha256':p['sha256'],'status':'pending','observations':''} for p in pages],

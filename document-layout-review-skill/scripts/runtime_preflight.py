@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve a usable Office path before modifying a document.
 
-Explicit Word requests never fall back to LibreOffice. No capability result is a
+Explicit engine requests never fall back to another engine. No capability result is a
 field-update or visual-acceptance result; those existing gates still run later.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from office_backends import PRIORITY, OfficeError, probe_native, select_renderer, find_office as _find_office
 
 
 class PreflightError(ValueError):
@@ -43,20 +44,15 @@ def run_probe(command, timeout=15):
 
 
 def probe_word():
-    shell = shutil.which('powershell') or shutil.which('pwsh')
-    if os.name != 'nt' or not shell:
-        return {'available': False, 'detail': '没有可调用的 Windows Word COM 环境。'}
-    # Create and close a dedicated application, without opening or modifying user documents.
-    code = ("$ErrorActionPreference='Stop'; $word=$null; try { "
-            "$word=New-Object -ComObject Word.Application; "
-            "$word.Visible=$false; Write-Output $word.Version "
-            "} finally { if ($null -ne $word) { $word.Quit(); "
-            "[void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) } }")
-    return run_probe([shell, '-NoProfile', '-NonInteractive', '-Command', code])
+    return probe_native('word')
+
+
+def probe_wps():
+    return probe_native('wps')
 
 
 def find_office():
-    return shutil.which('libreoffice') or shutil.which('soffice') or shutil.which('soffice.exe')
+    return _find_office()
 
 
 def probe_libreoffice(uno_python=None):
@@ -84,22 +80,21 @@ def probe_libreoffice(uno_python=None):
             'attempts': attempts}
 
 
-def select_engine(requested='auto', uno_python=None):
-    if requested not in {'auto', 'word', 'libreoffice'}:
+def select_engine(requested='auto', uno_python=None, *, exclude=()):
+    if requested not in {'auto', *PRIORITY}:
         raise PreflightError('office-engine-invalid', '不支持的域更新引擎。', requested=requested)
     attempts = {}
-    if requested in {'auto', 'word'}:
-        attempts['word'] = probe_word()
-        if attempts['word']['available']:
-            return {'engine': 'word', 'requested': requested, 'capabilities': attempts}
-        if requested == 'word':
-            raise PreflightError('word-engine-unavailable', '明确指定的 Word 引擎不可用，未改用其他引擎。', probes=attempts)
-    attempts['libreoffice'] = probe_libreoffice(uno_python)
-    if attempts['libreoffice']['available']:
-        return {'engine': 'libreoffice', 'requested': requested,
-                'uno_python': attempts['libreoffice']['uno_python'],
-                'capabilities': attempts}
-    raise PreflightError('office-engine-unavailable', '没有可用的真实域更新引擎；未开始文档修改。', probes=attempts)
+    for engine in (PRIORITY if requested == 'auto' else (requested,)):
+        if engine in exclude:
+            continue
+        probe = probe_word() if engine == 'word' else probe_wps() if engine == 'wps' else probe_libreoffice(uno_python)
+        attempts[engine] = probe
+        if probe.get('available'):
+            return {'engine': engine, 'requested': requested, 'priority': list(PRIORITY),
+                    'uno_python': probe.get('uno_python'), 'capabilities': attempts}
+    code = 'office-engine-unavailable' if requested == 'auto' else requested + '-engine-unavailable'
+    raise PreflightError(code, '没有可用的真实域更新引擎；明确指定引擎时不自动降级。',
+                         requested=requested, probes=attempts)
 
 
 def validate_docx(path):
@@ -137,7 +132,7 @@ def validate_profile(template, profile):
 
 
 def check(source, template, work_dir, *, requested='auto', profile=None,
-          audit_only=False, uno_python=None):
+          audit_only=False, uno_python=None, renderer='auto'):
     documents = {'source': validate_docx(source), 'template': validate_docx(template)}
     rule_profile = validate_profile(template, profile)
     work_dir = Path(work_dir)
@@ -148,18 +143,19 @@ def check(source, template, work_dir, *, requested='auto', profile=None,
             probe.flush()
     except OSError as exc:
         raise PreflightError('work-directory-unwritable', '工作目录不可写；未开始文档修改。') from exc
-    office = find_office()
     ppm = shutil.which('pdftoppm') or shutil.which('pdftoppm.exe')
-    if not office or not ppm:
-        raise PreflightError('renderer-unavailable', '当前渲染入口需要 LibreOffice 和 pdftoppm，未开始文档修改。',
-                             soffice=office, pdftoppm=ppm)
-    for command in ([office, '--headless', '--version'], [ppm, '-v']):
-        probe = run_probe(command)
-        if not probe['available']:
-            raise PreflightError('renderer-unusable', '渲染程序无法执行；未开始文档修改。', probe=probe)
+    if not ppm:
+        raise PreflightError('renderer-unavailable', '缺少 pdftoppm；不能跳过页面图片验收。')
+    probe = run_probe([ppm, '-v'])
+    if not probe['available']:
+        raise PreflightError('renderer-unusable', '页面转换程序无法执行。', probe=probe)
+    try:
+        rendering = select_renderer(renderer)
+    except OfficeError as exc:
+        raise PreflightError(exc.code, str(exc), **exc.details) from exc
     selected = {'engine': None, 'requested': requested, 'reason': 'audit-only 使用已核验的更新域报告'} if audit_only else select_engine(requested, uno_python)
     return {'status': 'passed', 'documents': documents, 'profile': rule_profile,
-            'field_engine': selected, 'renderer': {'soffice': office, 'pdftoppm': ppm},
+            'field_engine': selected, 'renderer': {**rendering, 'pdftoppm': ppm},
             'note': '此结果只证明执行条件可用，不代表文档修复、域更新或视觉验收已通过。'}
 
 
@@ -169,14 +165,15 @@ def main():
     ap.add_argument('--template', type=Path, required=True)
     ap.add_argument('--template-style-json', type=Path)
     ap.add_argument('--work-dir', type=Path, required=True)
-    ap.add_argument('--field-engine', choices=['auto', 'word', 'libreoffice'], default='auto')
+    ap.add_argument('--field-engine', choices=['auto', 'word', 'wps', 'libreoffice'], default='auto')
+    ap.add_argument('--renderer', choices=['auto', 'word', 'wps', 'libreoffice'], default='auto')
     ap.add_argument('--uno-python')
     ap.add_argument('--audit-only', action='store_true')
     ap.add_argument('--json-out', type=Path)
     args = ap.parse_args()
     try:
         result = check(args.input, args.template, args.work_dir, requested=args.field_engine,
-                       profile=args.template_style_json, audit_only=args.audit_only, uno_python=args.uno_python)
+                       profile=args.template_style_json, audit_only=args.audit_only, uno_python=args.uno_python, renderer=args.renderer)
     except PreflightError as exc:
         result = {'status': 'blocked', 'issues': [exc.as_issue()]}
     payload = json.dumps(result, ensure_ascii=False, indent=2)

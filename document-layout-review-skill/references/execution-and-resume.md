@@ -14,7 +14,7 @@ python scripts/review_pipeline.py input.docx --work-dir work
 
 程序要求 `requires_image_review` 时，Agent 查看完整原图和必要局部，完成 `work/reports/initial-visual-review.json`。有缺题注、豁免或编号语义需要定位时，按真实对象生成 `object-plan.json`/`numbering-plan.json`。随后仍以原始输入执行，带上 `--initial-visual-review` 及存在的相应计划；不要传不存在的占位文件，也不要让用户代填内部记录。
 
-环境默认 `--field-engine auto`；用户指定 Word 时必须追加 `--field-engine word`，不得静默降级。环境可用和初检完成均不是验收通过。
+默认 `--renderer auto` 与 `--field-engine auto`，分别按 **Word → WPS → LibreOffice** 顺序选择可调用引擎；渲染失败会按顺序重试。明确指定某引擎时只执行该引擎，不静默降级；只指定 `--field-engine word` 并不等于限定渲染器，要求两者都是 Word 时同时传 `--renderer word --field-engine word`。环境可用和初检完成均不是验收通过。依赖、记录及失败处理见 `rendering-engines.md`。
 
 ## 2. 局部修复后实际更新域
 
@@ -24,7 +24,7 @@ python scripts/review_pipeline.py input.docx --work-dir work
 python scripts/field_refresh.py repaired.docx --out refreshed.docx --json-out refreshed-fields.json
 ```
 
-刷新脚本使用 `--engine word` 或 `--engine libreoffice` 指定已确定引擎；流水线对应参数是 `--field-engine`，两者不能写混。需要指定 UNO Python 时沿用 `--uno-python`。不能把刷新报告对应到另一个后来修改过的文件。
+刷新脚本使用 `--engine word`、`--engine wps` 或 `--engine libreoffice` 指定已确定引擎；流水线对应参数是 `--field-engine`，两者不能写混。需要指定 UNO Python 时沿用 `--uno-python`。不能把刷新报告对应到另一个后来修改过的文件。
 
 涉及编号结构修复或引擎恢复域指令时，用输出再实际刷新一次，复核再次计算的序号和域结构：
 
@@ -42,7 +42,7 @@ python scripts/field_refresh.py refreshed.docx --out refreshed-again.docx --json
 python scripts/review_pipeline.py refreshed.docx --work-dir work --audit-only --source input.docx --field-update-report refreshed-fields.json --initial-visual-review work/reports/initial-visual-review.json --content-plan work/reports/content-plan.json
 ```
 
-有第二次刷新时，将输入和 `--field-update-report` 同时换成第二次输出。上传模板任务必须补上**原来的** `--template`、`--template-style-json`、`--text-rules`；没有用户覆盖时也沿用本次生效规则，不临时改脚本默认值。
+有第二次刷新时，将输入和 `--field-update-report` 同时换成第二次输出。存在明确的 `--renderer` / `--field-engine` 要求时，续跑必须保留；默认模式仍使用 `auto`。上传模板任务必须补上**原来的** `--template`、`--template-style-json`、`--text-rules`；没有用户覆盖时也沿用本次生效规则，不临时改脚本默认值。
 
 有对象豁免等语义决定时，追加与当前对象哈希绑定的有效 `--object-plan`。沿用原文绑定的内容保护计划，不重新以候选生成基准；脚注搬移登记不得遗漏。对象真的发生变化时，先按实际源与候选核对对应关系，再用支持的工具重新定位，不能只改哈希躲过校验。
 
@@ -70,4 +70,4 @@ python scripts/review_pipeline.py refreshed.docx --work-dir work --audit-only --
 python scripts/finalize_review.py work/review-manifest.json final-visual-review.json --out final.docx --json-out release.json
 ```
 
-只交付入口成功输出的 Word 及实际修复报告。回报原问题、位置、实际修改、复查结果和真实验证范围；不能把 LibreOffice 的结果写成 Windows Word F9 实测。源码级回归与正常文档验收是不同任务，不把测试通过等同于某份 Word 已通过视觉验收。
+只交付入口成功输出的 Word 及实际修复报告。回报原问题、位置、实际修改、复查结果和真实验证范围；报告同时记录实际渲染引擎、切换原因及实际域更新引擎；不能把 WPS/LibreOffice 的结果写成 Windows Word F9 实测。源码级回归与正常文档验收是不同任务，不把测试通过等同于某份 Word 已通过视觉验收。
