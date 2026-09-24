@@ -82,7 +82,7 @@ def validate_release(manifest, visual):
     # Rerun the highest-risk policy on the current bytes, not merely a stored PASS.
     checked=audit_document(candidate,Path(m['template']),Path(m['template_style_json']),m.get('object_plan'))
     if checked['status']!='passed':raise PolicyError('final-numbering-failed','交付前重新核验题注/标题失败。',issues=checked['issues'])
-    from template_table_style import audit as audit_table_template
+    from stable_table_audit import audit as audit_table_template
     table_checked=audit_table_template(candidate,Path(m['template']),Path(m['template_style_json']))
     if table_checked['status']!='passed':raise PolicyError('final-table-template-failed','交付前表格外观不符合模板。',issues=table_checked['issues'])
     from content_integrity import audit as audit_content

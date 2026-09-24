@@ -17,7 +17,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from block_progress import (BlockError, STATE, Q, initialize, load, next_block,
-    block_by_id, accept_global, accept_shared_repair, checkpoint, reopen, sha, read_json, write_json, session_lock)
+    cached_operation, block_by_id, accept_global, accept_shared_repair, checkpoint, reopen, sha, read_json, write_json, session_lock)
 
 HERE = Path(__file__).resolve().parent
 
@@ -40,12 +40,14 @@ def settings_from_args(args, reports):
     settings = {**paths, 'baselines': {k: {'path': p, 'sha256': sha(p)} for k, p in paths.items()},
                 'renderer': args.renderer or 'auto', 'field_engine': args.field_engine or 'auto',
                 'uno_python': args.uno_python,
-                'vision_worker_config': str(args.vision_worker_config) if args.vision_worker_config else None}
+                'vision_worker_config': str(args.vision_worker_config.resolve()) if args.vision_worker_config else None,
+                'stability_checks':True}
     return settings
 
 
 def _initialize_objects_unlocked(work, state):
     from numbering_policy import Doc, inventory, public_inventory
+    from review_objects import inventory, public_inventory
     from figure_review import make_review_template
     from content_integrity import make_plan
     reports = work / 'reports'
@@ -56,20 +58,31 @@ def _initialize_objects_unlocked(work, state):
         block['figures'] = []
         block['objects'] = []
         for obj in objects:
-            if block.get('part', 'word/document.xml') != 'word/document.xml':
+            part=block.get('part','word/document.xml')
+            if part != obj.get('part','word/document.xml'):
                 continue
+            parent=body if part=='word/document.xml' else doc.root(part)
             owner = obj['element']
-            while owner.getparent() is not None and owner.getparent() is not body:
+            while owner.getparent() is not None and owner.getparent() is not parent:
                 owner = owner.getparent()
-            if owner.getparent() is body and block['source_start'] <= body.index(owner) < block['source_end']:
+            if owner.getparent() is parent and block['source_start'] <= parent.index(owner) < block['source_end']:
                 block['objects'].append(obj['id'])
                 if obj['kind'] == 'figure':
                     block['figures'].append(obj['id'])
     initial = reports / 'initial-visual-review.json'
     # Inventory only. No model call and no full-document image review at startup.
-    write_json(initial, make_review_template(Path(state['source']), work / 'source-images'))
+    prepared=make_review_template(Path(state['source']),work/'source-images')
+    previous=read_json(initial) if initial.is_file() else {}
+    if previous.get('source_sha256')==prepared['source_sha256']:
+        known={r['id']:r for r in previous.get('objects',[])}
+        for i,row in enumerate(prepared['objects']):
+            prior=known.get(row['id'])
+            if prior and prior.get('object_sha256')==row['object_sha256']:
+                prepared['objects'][i]=prior
+    write_json(initial,prepared)
     content = reports / 'content-plan.json'
-    write_json(content, make_plan(Path(state['source']), None))
+    if not content.is_file():
+        write_json(content, make_plan(Path(state['source']), None))
     write_json(reports / 'object-inventory.json', {'objects': public_inventory(doc)})
     state['initial_review'] = str(initial.resolve())
     state['content_plan'] = str(content.resolve())
@@ -77,13 +90,14 @@ def _initialize_objects_unlocked(work, state):
     state['discovery_ledger'] = str((reports / 'image-discoveries.json').resolve())
     ledger(Path(state['source']), state['discovery_ledger'])
     state['objects_initialized'] = True
+    state['object_inventory_version'] = 2
     write_json(work / STATE, state)
 
 
 def initialize_objects(work,state):
     with session_lock(work):
         current=load(work)
-        if not current.get('objects_initialized'):
+        if not current.get('objects_initialized') or current.get('object_inventory_version',1)<2:
             _initialize_objects_unlocked(work,current)
 
 
@@ -91,6 +105,7 @@ def require_initial_for_block(state, block):
     if not block.get('figures'):
         return
     from numbering_policy import Doc, inventory
+    from review_objects import inventory
     from figure_inspection import verify_row
     rows = {r['id']: r for r in read_json(state['initial_review'])['objects']}
     doc = Doc(Path(state['source']))
@@ -105,6 +120,7 @@ def require_local_image_change(state, block, proposal):
     if not block.get('figures'):
         return
     from numbering_policy import Doc,inventory
+    from review_objects import inventory
     from visual_evidence import INTRINSIC,validate_inspection,validate_bundle,checked_file,normalized_image,pixel_sha
     rows={r['id']:r for r in read_json(state['initial_review'])['objects']}
     doc=Doc(Path(proposal));objects={o['id']:o for o in inventory(doc)}
@@ -130,15 +146,37 @@ def inspect_current_images(work, state, block, config):
     ids = block.get('figures', [])
     if not ids:
         return {'status': 'not_applicable', 'block': block['id'], 'figure_count': 0}
-    if config is None:
-        raise BlockError('当前块含图片；请提供本次已授权的视觉接口配置，不能手填 PASS。')
     from figure_inspection import inspect_initial
     result = inspect_initial(Path(state['source']), state['initial_review'], config,
                              work / 'initial-inspections', object_ids=ids)
     write_json(state['initial_review'], result)
     require_initial_for_block(state, block)
-    return {'status': 'inspected', 'block': block['id'], 'figures': ids, 'review': state['initial_review']}
+    verdicts={r['id']:('fail' if 'fail' in r.get('checks',{}).values() else 'pending' if any(v in {'pending','uncertain'} for v in r.get('checks',{}).values()) else 'pass') for r in result['objects'] if r['id'] in ids}
+    return {'status':'inspected','block':block['id'],'figures':ids,'verdicts':verdicts,'review':state['initial_review']}
 
+
+
+def persist_vision_config(work, state, supplied):
+    if supplied is None:
+        return state['settings'].get('vision_worker_config')
+    path=Path(supplied).resolve()
+    from visual_evidence import load_worker
+    load_worker(path)  # validate format only; no external request
+    old=state['settings'].get('vision_worker_config')
+    if old and Path(old).resolve()!=path:
+        raise BlockError('视觉接口已有配置；更换已授权服务请使用 configure，不能在某一块静默切换。')
+    if old!=str(path):
+        state['settings']['vision_worker_config']=str(path)
+        write_json(Path(work)/STATE,state)
+    return str(path)
+
+
+def require_probe(work, state, proposal):
+    if state['settings'].get('stability_checks'):
+        from office_stability import probe_once
+        from field_refresh import refresh
+        return probe_once(work,state,proposal,refresh)
+    return None
 
 def reuse_unchanged_reviews(previous, template, manifest):
     """Reuse only exact current page evidence; changed pages + neighbours stay pending."""
@@ -246,7 +284,38 @@ def audit_fingerprint(state):
     return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
+
 def final_audit(work, state, args):
+    from retry_guard import before_retry, record_failure, record_success
+    if not state['global_ready'] or any(b['status']!='checked' for b in state['blocks']):
+        raise BlockError('还有未完成块；不能提前执行全文终检。')
+    key=before_retry(state,HERE)
+    try:
+        result,code=_final_audit_impl(work,state,args)
+    except Exception as exc:
+        issue=exc.as_issue() if hasattr(exc,'as_issue') else {'code':type(exc).__name__,'message':str(exc)}
+        record_failure(state,key,[issue]);write_json(Path(work)/STATE,state)
+        raise
+    # Cached failures do not represent another execution. Count actual attempts only.
+    if not result.get('reused_prepared_audit'):
+        if code:
+            manifest=read_json(result['manifest']) if result.get('manifest') else {}
+            issues=[{'gate':g['id'],'issues':(g.get('result') or {}).get('issues',[])}
+                    for g in manifest.get('gates',[]) if not g.get('passed')]
+            if not issues:issues=[{'code':'final-preparation-failed'}]
+            entry=record_failure(state,key,issues)
+            if entry['repeated']>=2:result['next']='requires_cause_fix'
+        else:
+            record_success(state)
+        write_json(Path(work)/STATE,state)
+        # State is part of the final binding; refresh its reference after diagnostics.
+        if result.get('manifest'):
+            m=read_json(result['manifest'])
+            if m.get('block_session'):
+                m['block_session']['sha256']=sha(Path(work)/STATE);write_json(result['manifest'],m)
+    return result,code
+
+def _final_audit_impl(work, state, args):
     if not state['global_ready'] or any(b['status'] != 'checked' for b in state['blocks']):
         raise BlockError('还有未完成块；不能提前执行全文终检。')
     fingerprint = audit_fingerprint(state)
@@ -291,9 +360,16 @@ def final_audit(work, state, args):
         field = refresh(Path(state['current']),refreshed,settings['field_engine'],settings.get('uno_python'),
                         preflight=(state.get('runtime_preflight') or {}).get('field_engine'))
         write_json(field_report,field)
+    if settings.get('stability_checks'):
+        from office_stability import compare
+        stability=compare(state['current'],refreshed)
+        write_json(round_dir/'office-roundtrip.json',stability)
+        if stability['status']!='passed':
+            raise BlockError('真实保存改变了正文/有效格式；前后文件与 office-roundtrip.json 已保留。定位保存差异，不得清除属性后原样重跑。')
     object_plan = None
     if state.get('object_plan'):
         from numbering_policy import Doc, inventory
+        from review_objects import inventory
         plan = read_json(state['object_plan'])
         old = {o['id']:o for o in inventory(Doc(Path(state['source'])))}
         new = {o['id']:o for o in inventory(Doc(refreshed))}
@@ -335,6 +411,7 @@ def final_audit(work, state, args):
     if template_path.is_file():
         template = read_json(template_path)
         from numbering_policy import Doc,inventory
+        from review_objects import inventory
         template['table_objects'] = [{'id':o['id'],'object_sha256':o['hash'],'status':'pending','observations':'','pages':[]}
                                      for o in inventory(Doc(Path(manifest['candidate']))) if o['kind']=='table']
         # Preserve manual page/table observations when retrying this same prepared candidate.
@@ -357,11 +434,12 @@ def final_audit(work, state, args):
             'failed_gates':[g['id'] for g in manifest.get('gates',[]) if not g['passed']]},code
 
 
+@cached_operation
 def main(argv=None):
     ap = argparse.ArgumentParser(description='按完整内容块修复；最终统一更新域、审计和渲染。')
     ap.add_argument('input', type=Path, nargs='?')
     ap.add_argument('--work-dir', type=Path, required=True)
-    ap.add_argument('--action', choices=['next', 'global', 'checkpoint', 'reopen', 'inspect-initial', 'final', 'inspect-final', 'shared', 'configure'], default='next')
+    ap.add_argument('--action', choices=['next', 'global', 'checkpoint', 'reopen', 'inspect-initial', 'final', 'inspect-final', 'shared', 'configure', 'image-plan', 'inspect-repaired'], default='next')
     ap.add_argument('--block'); ap.add_argument('--proposal', type=Path); ap.add_argument('--note', default='')
     ap.add_argument('--template', type=Path); ap.add_argument('--template-style-json', type=Path)
     ap.add_argument('--text-rules', type=Path); ap.add_argument('--object-plan', type=Path); ap.add_argument('--content-plan', type=Path)
@@ -395,9 +473,15 @@ def main(argv=None):
         state = load(work)
         if args.input is not None and sha(args.input) != state['input_sha256']:
             raise BlockError('此工作目录属于另一份原文；不能静默更换输入。')
-        if not state.get('objects_initialized'):
+        if not state.get('objects_initialized') or state.get('object_inventory_version') != 2:
             initialize_objects(work, state)
             state = load(work)
+        if not state['settings'].get('stability_checks'):
+            with session_lock(work):
+                state=load(work);state['settings']['stability_checks']=True
+                if state.get('final'):state['previous_final']=state['final']
+                state['final']=None;state.pop('final_attempt',None)
+                write_json(work/STATE,state)
         if args.object_plan or args.content_plan:
             with session_lock(work):
                 state = persist_plans(work,load(work),args)
@@ -416,7 +500,12 @@ def main(argv=None):
                     equal = sha(value) == state['settings']['baselines'][key]['sha256']
                 if not equal:
                     raise BlockError(f'续跑 {key} 与锁定基准不同。')
-        config = args.vision_worker_config or state['settings'].get('vision_worker_config')
+        if args.action != 'configure' and args.vision_worker_config:
+            with session_lock(work):
+                state=load(work)
+                config=persist_vision_config(work,state,args.vision_worker_config)
+        else:
+            config=args.vision_worker_config or state['settings'].get('vision_worker_config')
         code = 0
         action = 'final' if args.audit_only else args.action
         if action == 'next':
@@ -429,27 +518,51 @@ def main(argv=None):
                     if value is not None:
                         state['settings'][key] = value
                 if args.vision_worker_config:
+                    from visual_evidence import load_worker
+                    load_worker(args.vision_worker_config.resolve())
                     state['settings']['vision_worker_config'] = str(args.vision_worker_config.resolve())
-                state['runtime_preflight'] = None
+                from runtime_preflight import check as runtime_check
+                settings=state['settings']
+                state['runtime_preflight']=runtime_check(Path(state['current']),Path(settings['template']),work,
+                    requested=settings['field_engine'],profile=Path(settings['template_style_json']),
+                    audit_only=False,uno_python=settings.get('uno_python'),renderer=settings['renderer'])
                 if state.get('final'):
                     state['previous_final'] = state['final']
                 state['final'] = None; state.pop('final_attempt',None)
                 write_json(work / STATE,state)
             result = next_block(work)
         elif action == 'shared':
+            from block_progress import global_scope
+            global_scope(state['current'],args.proposal or state['current'])
+            require_probe(work,state,args.proposal or state['current'])
             accept_shared_repair(work,args.proposal or state['current'],args.note)
             result = next_block(work)
         elif action == 'global':
+            if state['global_ready']:raise BlockError('全局准备已完成，不重复保存或改写全文。')
+            from block_progress import global_scope
+            global_scope(state['current'],args.proposal or state['current'])
+            require_probe(work,state,args.proposal or state['current'])
             accept_global(work, args.proposal or state['current'], args.note)
             result = next_block(work)
-        elif action in {'checkpoint', 'reopen', 'inspect-initial'}:
+        elif action in {'checkpoint', 'reopen', 'inspect-initial', 'image-plan', 'inspect-repaired'}:
             ident = args.block or (next_block(work).get('block') or {}).get('id')
             block = block_by_id(state, ident)
             if action == 'checkpoint':
                 require_initial_for_block(state, block)
                 require_local_image_change(state,block,args.proposal or state['current'])
+                if block.get('figures'):
+                    from image_repairs import require_repaired
+                    require_repaired(work,state,block,args.proposal or state['current'])
                 checkpoint(work, ident, args.proposal or state['current'], args.note)
                 result = next_block(work)
+            elif action=='image-plan':
+                require_initial_for_block(state,block)
+                from image_repairs import authorize
+                result=authorize(work,state,block)
+            elif action=='inspect-repaired':
+                require_initial_for_block(state,block)
+                from image_repairs import inspect_repaired
+                result=inspect_repaired(work,state,block,args.proposal or state['current'],config)
             elif action == 'reopen':
                 reopen(work, ident, args.note)
                 result = next_block(work)
@@ -486,8 +599,10 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return code or 0
     except Exception as exc:
-        print(json.dumps({'status': 'blocked', 'message': str(exc)}, ensure_ascii=False, indent=2))
-        return 2
+        issue=exc.as_issue() if hasattr(exc,'as_issue') else {'message':str(exc)}
+        waiting=issue.get('code')=='visual-host-review-required'
+        print(json.dumps({'status':'awaiting_host_visual' if waiting else 'blocked','issue':issue},ensure_ascii=False,indent=2))
+        return 4 if waiting else 2
 
 
 if __name__ == '__main__':

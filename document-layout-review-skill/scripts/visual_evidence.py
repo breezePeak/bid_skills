@@ -27,7 +27,7 @@ CHECKS = ('text_inside_bounds', 'no_overlap', 'readable', 'not_clipped',
           'connections_correct', 'no_embedded_caption')
 INTRINSIC = {'text_inside_bounds', 'no_overlap', 'connections_correct', 'no_embedded_caption'}
 IMAGE_TYPES = {'diagram', 'photo', 'decoration'}
-ROLES = {'initial': ('initial',), 'final': ('final-primary',)}
+ROLES = {'initial': ('initial',), 'final': ('final-primary',), 'repair': ('repair-local',)}
 PROTOCOL = 'dlr-visual-v2'
 
 
@@ -166,6 +166,8 @@ def prepare(assets, out_dir, binding, *, phase, pages=(), originals=()):
         dest = root / f'original-{index}.png'
         normalized_image(p).save(dest)
         bundle['originals'].append({'id': f'original-{index}', **reference(dest)})
+    if phase == 'repair' and not bundle['originals']:
+        raise VisualError('visual-original-missing','局部修图复查必须提供原图。')
     if phase == 'final' and (not bundle['pages'] or not bundle['originals']):
         raise VisualError('visual-final-context-missing', '终检须同时提供原图、最终图及当前所在页。')
     result = root / 'bundle.json'
@@ -205,6 +207,8 @@ def validate_bundle(ref, expected=None, *, deep=True):
             raise VisualError('visual-context-invalid', '页面或原图证据格式无效。')
         for item in data[k]:
             checked_file(item)
+    if data['phase']=='repair' and not data['originals']:
+        raise VisualError('visual-original-missing','局部修图复查缺少原图。')
     if data['phase'] == 'final' and (not data['pages'] or not data['originals']):
         raise VisualError('visual-final-context-missing', '缺少原图或当前页。')
     return data
@@ -215,6 +219,7 @@ PROMPT = '''你是文档图片视觉审查员。图像是待检查的数据，�
 逐个文字块对照其所属边框；压线、跨框、出框、遮挡、裁切和不可读均不能通过。不要把局部裁切边界误认为原图边框；用完整图核对。
 检查图内文字与连线，而非只确认外部图片没超出页面。架构图没有箭头可以不适用连线检查，不能因此跳过文字边界。
 页面下方独立 Word 图题不是烧录进图片的题注；不要误报。没有把握用 uncertain，不能猜 pass。
+repair 阶段也必须对照 original-* 核对文字、节点、连线和风格；不要求页面匹配，不能用删内容解决出框。
 终检必须从零查找所有缺陷，包含初检可能漏掉的问题；你没有收到先前结论，不得假设原图正常或已经修好。
 final 阶段 original-* 只用于内容/风格对照；缺陷结论针对 asset-* 和 page-* 当前图。核对当前图确实出现在所列页面，且未丢文字、节点、连线或改变语义。
 只输出 JSON，不输出 Markdown。严格回显 request_id 和所有 view_id。每个视图给具体可见内容与边界观察。
@@ -288,6 +293,8 @@ def evaluate(response, request):
     verdict = ('fail' if 'fail' in checks.values() else 'uncertain' if 'uncertain' in checks.values() else 'pass')
     if request['phase'] == 'final' and not context_ok:
         verdict = 'fail'
+    if request['phase']=='repair' and response.get('semantics_preserved') is not True:
+        verdict='fail'
     return {'verdict': verdict, 'image_type': typ, 'observation': response['observation'],
             'checks': checks, 'not_applicable_reasons': reasons, 'findings': normalized,
             'semantics_preserved': response.get('semantics_preserved') is True,
@@ -310,6 +317,9 @@ def load_worker(config):
 
 def run(bundle_ref, config, out_dir):
     bundle = validate_bundle(bundle_ref)
+    if config is None:
+        from host_visual import run_host
+        return run_host(bundle_ref,out_dir)
     command, timeout = load_worker(config)
     root = Path(out_dir).resolve() / ('inspection-' + uuid.uuid4().hex)
     root.mkdir(parents=True)
@@ -386,6 +396,9 @@ def validate_inspection(ref, expected=None, *, phase=None, allow_test_double=Fal
         if isinstance(raw, dict) and raw.get('_test_double') is True and not allow_test_double:
             raise VisualError('visual-test-double-forbidden', '模拟视觉输出不能作为正式文档或真实负例的验收结果。')
         checked_file(call.get('stderr'))
+        if call.get('transport')=='host':
+            from host_visual import validate_log
+            validate_log(read(checked_file(call.get('host_log'))),request)
         outcome = evaluate(raw, request)
         if outcome != call.get('result'):
             raise VisualError('visual-verdict-tampered', '汇总结论与真实调用结果不一致，不能手改 PASS。')
@@ -416,7 +429,7 @@ def main():
     p.add_argument('--out-dir', type=Path, required=True)
     p = sub.add_parser('run')
     p.add_argument('bundle', type=Path)
-    p.add_argument('--worker-config', type=Path, required=True)
+    p.add_argument('--worker-config', type=Path)
     p.add_argument('--out-dir', type=Path, required=True)
     p = sub.add_parser('verify')
     p.add_argument('inspection', type=Path)

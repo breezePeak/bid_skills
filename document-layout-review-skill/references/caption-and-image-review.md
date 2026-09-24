@@ -16,6 +16,6 @@
 
 ## 执行
 
-用当前分块入口 `--action inspect-initial` 检查当前块的原图；本块修复完成后提交 `checkpoint` 继续下一块。所有块完成后 `--action final` 统一更新域、审计、渲染。填写实际页面及全部表格观察后，`--action inspect-final` 核验图与当前页面；最后使用返回的本轮路径调用 `finalize_review.py`。
+用当前分块入口 `--action inspect-initial` 检查当前块的原图；需要改图内内容时先生成 `image-plan`，修复后用 `inspect-repaired` 查看实际新图；本块修复完成且检查通过后提交 `checkpoint` 继续下一块。所有块完成后 `--action final` 统一更新域、审计、渲染。填写实际页面及全部表格观察后，`--action inspect-final` 核验图与当前页面；最后使用返回的本轮路径调用 `finalize_review.py`。
 
 详细命令见 `execution-and-resume.md`；真实图片输入、原生 Shape 裁片绑定、证据复用和失败台账见 `visual-inspection.md`。不使用旧的“全文图片先检查完再批量修复”调用方式。

@@ -78,7 +78,9 @@ def _refresh_once(source, out, engine='auto', uno_python=None, *, preflight=None
     # caches after an edit are allowed here, malformed references are not.
     require_caption_fields(source, check_cache=False)
     source_hash=file_digest(source);out.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=out.parent) as work:
+    from office_stability import office_workspace, complete_output
+    cleanup_warnings=[]
+    with office_workspace(out.parent, cleanup_warnings) as work:
         candidate=Path(work)/'refreshed.docx';report=Path(work)/'engine.json'
         if engine in {'word', 'wps'}:
             snapshot = Path(work) / 'input.docx'
@@ -108,6 +110,7 @@ def _refresh_once(source, out, engine='auto', uno_python=None, *, preflight=None
             raise PolicyError('office-engine-invalid','不支持的域刷新引擎。')
         if data.get('status') != 'passed' or not candidate.is_file():
             raise PolicyError('field-refresh-failed', '没有实际更新域的有效输出。', engine=engine, detail=data)
+        complete_output(candidate)
         errors=result_errors(candidate)
         if errors:raise PolicyError('field-result-error','实际更新域后仍有错误，未写入输出。',errors=errors)
         # Keep real engine-calculated results, but do not let an exporter discard
@@ -119,6 +122,8 @@ def _refresh_once(source, out, engine='auto', uno_python=None, *, preflight=None
         caption_check = require_caption_fields(candidate)
         if file_digest(source)!=source_hash:raise PolicyError('source-changed-by-office','Office 更新域时改动了输入文件，停止交付。')
         os.replace(candidate,out)
+    data.setdefault('warnings',[]).extend(cleanup_warnings)
+    data['cleanup_status']='warning' if data['warnings'] else data.get('cleanup_status','passed')
     data.update({'source_sha256':file_digest(source),'output_sha256':file_digest(out),'output':str(out),
                  'errors':[], 'native_caption_preservation':preservation, 'caption_fields':caption_check, 'note':'已由所列引擎更新并保存；WPS/LibreOffice 结果不等同于 Windows Word F9 的兼容性保证。'})
     return data

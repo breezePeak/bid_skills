@@ -34,7 +34,7 @@ TOGGLES = {'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike', 'outline',
 BOOLS = TOGGLES | {'dstrike', 'contextualSpacing', 'mirrorIndents',
                   'suppressAutoHyphens', 'suppressLineNumbers', 'autoSpaceDE',
                   'autoSpaceDN', 'bidi', 'snapToGrid', 'adjustRightInd', 'wordWrap',
-                  'widowControl'}
+                  'widowControl', 'keepNext', 'keepLines', 'pageBreakBefore'}
 # Word defaults for properties that are on even in the absence of an element.
 DEFAULT_ON = {'snapToGrid', 'autoSpaceDE', 'autoSpaceDN', 'wordWrap', 'widowControl'}
 STORY = ('document', 'header', 'footer', 'footnotes', 'endnotes')
@@ -83,8 +83,16 @@ def merge(base, extra, *, style=False):
         else:
             replacement = copy.deepcopy(child)
             if previous is not None:
+                ignored = set()
+                if name == 'rFonts':
+                    for slot in ('ascii','hAnsi','eastAsia','cs'):
+                        themes = {Q(slot+'Theme')} | ({Q('cstheme')} if slot=='cs' else set())
+                        if Q(slot) in child.attrib and not themes.intersection(child.attrib):
+                            ignored.update(themes)
+                        elif themes.intersection(child.attrib):
+                            ignored.add(Q(slot))
                 for attr, value in previous.attrib.items():
-                    if attr not in replacement.attrib:
+                    if attr not in replacement.attrib and attr not in ignored:
                         replacement.set(attr, value)
                 if len(previous) and len(child):
                     replacement = copy.deepcopy(previous)
@@ -179,6 +187,20 @@ def value_key(props, tag):
     node = props.find(Q(tag))
     if tag in BOOLS:
         return (tag in DEFAULT_ON) if node is None else node.get(Q('val'), '1').lower() not in FALSE
+    if tag in {'sz','szCs','outlineLvl'} and node is not None:
+        val=node.get(Q('val'))
+        return int(val) if val is not None and val.lstrip('-').isdigit() else signature(node)
+    if tag == 'jc':
+        value=node.get(Q('val'),'start') if node is not None else 'start'
+        rtl=value_key(props,'bidi')
+        return ('right' if rtl else 'left') if value=='start' else ('left' if rtl else 'right') if value=='end' else value
+    if tag == 'ind':
+        attrs={} if node is None else {E.QName(k).localname:v for k,v in node.attrib.items()}
+        return tuple(sorted((k,int(v) if v.lstrip('-').isdigit() else v) for k,v in attrs.items() if v not in {'0','00'}))
+    if tag == 'spacing' and props.tag == Q('pPr'):
+        attrs={} if node is None else {E.QName(k).localname:v for k,v in node.attrib.items()}
+        defaults={'before':'0','after':'0','line':'240','lineRule':'auto','beforeAutospacing':'0','afterAutospacing':'0'}
+        return tuple(sorted((k,v) for k,v in attrs.items() if defaults.get(k)!=v))
     if node is None:
         return {'color': 'auto', 'u': 'none', 'highlight': 'none', 'effect': 'none',
                 'spacing': '0', 'position': '0', 'w': '100', 'kern': '0',
@@ -191,7 +213,11 @@ def value_key(props, tag):
     if tag == 'color' and attrs == {'val': 'auto'}:
         return 'auto'
     if tag in {'spacing', 'position', 'w', 'kern', 'textAlignment', 'textDirection'} and set(attrs) == {'val'}:
-        return attrs['val']
+        val=attrs['val']
+        if tag in {'spacing','position','w','kern'}:
+            try:return str(int(val))
+            except (TypeError,ValueError):pass
+        return val
     # Ignore a redundant auto underline color in the no-underline state.
     return signature(node)
 

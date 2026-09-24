@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from visual_evidence import VisualError
 from numbering_policy import Doc, PolicyError, digest, file_digest, inventory
+from review_objects import inventory
 
 CHECKS = ('text_inside_bounds', 'no_overlap', 'readable', 'not_clipped',
           'connections_correct', 'no_embedded_caption')
@@ -166,8 +167,8 @@ def main():
     p = sub.add_parser('prepare'); p.add_argument('source', type=Path); p.add_argument('--out-dir', type=Path, required=True); p.add_argument('--json-out', type=Path, required=True)
     p = sub.add_parser('initial'); p.add_argument('source', type=Path); p.add_argument('review', type=Path); p.add_argument('--json-out', type=Path)
     p = sub.add_parser('final'); p.add_argument('source', type=Path); p.add_argument('candidate', type=Path); p.add_argument('initial_review', type=Path); p.add_argument('final_review', type=Path); p.add_argument('manifest', type=Path); p.add_argument('--json-out', type=Path)
-    p = sub.add_parser('inspect-initial'); p.add_argument('source', type=Path); p.add_argument('review', type=Path); p.add_argument('--worker-config', type=Path, required=True); p.add_argument('--out-dir', type=Path, required=True); p.add_argument('--json-out', type=Path, required=True)
-    p = sub.add_parser('inspect-final'); p.add_argument('source', type=Path); p.add_argument('candidate', type=Path); p.add_argument('initial_review', type=Path); p.add_argument('final_review', type=Path); p.add_argument('manifest', type=Path); p.add_argument('--worker-config', type=Path, required=True); p.add_argument('--out-dir', type=Path, required=True); p.add_argument('--json-out', type=Path, required=True)
+    p = sub.add_parser('inspect-initial'); p.add_argument('source', type=Path); p.add_argument('review', type=Path); p.add_argument('--worker-config', type=Path); p.add_argument('--out-dir', type=Path, required=True); p.add_argument('--json-out', type=Path, required=True)
+    p = sub.add_parser('inspect-final'); p.add_argument('source', type=Path); p.add_argument('candidate', type=Path); p.add_argument('initial_review', type=Path); p.add_argument('final_review', type=Path); p.add_argument('manifest', type=Path); p.add_argument('--worker-config', type=Path); p.add_argument('--out-dir', type=Path, required=True); p.add_argument('--json-out', type=Path, required=True)
     p = sub.add_parser('bind-rendered'); p.add_argument('source', type=Path); p.add_argument('review', type=Path); p.add_argument('render_report', type=Path); p.add_argument('locations', type=Path); p.add_argument('--json-out', type=Path, required=True)
     a = ap.parse_args()
     protected = {getattr(a, key).resolve() for key in ('source','candidate','review','initial_review','final_review','manifest','worker_config','render_report','locations') if getattr(a, key, None) is not None}

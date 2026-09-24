@@ -16,7 +16,7 @@ python scripts/review_pipeline.py input.docx --work-dir work
 python scripts/review_pipeline.py --work-dir work --action global --proposal global-ready.docx --note "实际修改的共同设置"
 ```
 
-共同设置已正确时，`--proposal` 使用当前工作文档；不能为了结束准备虚构修改。全局设置完成后不再重复执行。
+共同设置已正确时，`--proposal` 使用当前工作文档；不能为了结束准备虚构修改。提交全局设置会先做一次代表性 Office 保存往返检查，成功且条件未变时复用。真实格式改变或无法确认时保存诊断样例，不重复跑全文；以原模板为标准。全局设置完成后不再重复执行。
 
 ## 当前块
 
@@ -37,7 +37,9 @@ python scripts/review_pipeline.py --work-dir work --view-offset 14 --view-size 1
 python scripts/review_pipeline.py --work-dir work --action inspect-initial --vision-worker-config worker.json
 ```
 
-实际修复并复核当前块后提交拟稿；块外内容或共享设置误改时，程序拒绝拟稿，保留当前正确工作文档。
+没有自动 worker 时省略配置，转宿主看图任务；首次明确传入的已授权配置会保存并由后续步骤继承。需要修图内内容时，初检后先执行 `--action image-plan`，修改后执行 `--action inspect-repaired --proposal block-fixed.docx`。
+
+实际修复并复核当前块后提交拟稿；块外误改、块内业务文字误改、实际字体字号不合规或域边界损坏时，程序拒绝拟稿，保留当前正确工作文档。
 
 ```bash
 python scripts/review_pipeline.py --work-dir work --action checkpoint --proposal block-fixed.docx --note "本块实际问题、修改和复核结果"
@@ -80,8 +82,8 @@ python scripts/review_pipeline.py --work-dir work --action reopen --block B0023 
 
 如果确需修正共享编号定义、页面或模板样式，使用 `--action shared --proposal shared-fixed.docx --note "缺陷和影响范围"`。该操作保护正文，不清空块进度，但使最终页面验收失效。
 
-未改文档再次请求 `final` 时返回现有任务，不反复更新域、渲染。引擎或审计步骤失败且执行条件已修复时加 `--retry-final`；已成功并绑定当前输入的步骤可复用，失败步骤不缓存为通过。命令配置需要调整时使用 `--action configure`，只允许执行引擎、UNO Python 和已授权视觉适配器配置变化；模板/文字规则不是静默切换项。
+未改文档再次请求 `final` 时返回现有任务，不反复更新域、渲染。引擎或审计步骤失败且执行条件已修复时加 `--retry-final`；已成功并绑定当前输入的步骤可复用，失败步骤不缓存为通过。相同语义输入和执行条件连续两次出现同因错误后停止第三次全量重试；`--retry-final` 不能绕过这个限制。文件改名或重打包不重置计数。命令配置需要调整时使用 `--action configure`，只允许执行引擎、UNO Python 和已授权视觉适配器配置变化；模板/文字规则不是静默切换项。
 
-断点恢复直接对同一 `--work-dir` 继续。系统锁随进程退出释放；旧分块会话补齐缺失的附属内容检查，不清空已完成正文。工作文档被外部改动、原文被替换或规则变化时先定位原因，不能改哈希绕过。
+断点恢复直接对同一 `--work-dir` 继续。系统锁随进程退出释放；旧分块会话补齐缺失的附属对象清单和保存检查能力，不清空已完成正文；以前的 checked 不会被伪装成本次新增局部审计的结果。工作文档被外部改动、原文被替换或规则变化时先定位原因，不能改哈希绕过。
 
 最终返修后，变化页面及相邻边界必须重看。仅在当前图像/页面及规则完全匹配时复用有效观察；不可复用旧的整份交付结论。

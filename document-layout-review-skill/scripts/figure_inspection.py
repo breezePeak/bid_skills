@@ -21,6 +21,7 @@ def _doc(path):
 
 def _figures(doc):
     from numbering_policy import inventory
+    from review_objects import inventory
     return [o for o in inventory(doc) if o['kind'] == 'figure']
 
 
@@ -303,6 +304,26 @@ def inspect_final(source, candidate, initial, visual, manifest, config, out_dir)
         root = Path(out_dir) / obj['id']
         assets = _extract(doc, obj, root, candidate, row)
         selected = _page_refs(row, m['render']['pages'])
+        # A registered intrinsic defect in identical pixels requires repair,
+        # not another paid model call hoping for a different verdict.
+        current_pixels = [pixel_sha(normalized_image(p)) for p in assets]
+        unchanged_failure = False
+        for prior_ref in discoveries['inspections']:
+            prior_result = validate_inspection(prior_ref, phase='final')
+            if (prior_result['binding'].get('object_id') == obj['id'] and
+                    prior_result['verdict'] == 'fail' and
+                    any(prior_result['checks'].get(k) == 'fail' for k in INTRINSIC) and
+                    _inspection_pixels(prior_result) == current_pixels):
+                unchanged_failure = True
+                break
+        if unchanged_failure:
+            any_failure = True
+            row['postcheck_issue'] = {'code':'late-image-defect-unchanged',
+                'message':'已登记图内缺陷但像素未变；不再次调用模型，先修当前图。'}
+            row['resolved_discovered_defects'] = []
+            if not isinstance(visual, dict):
+                write(visual, data)
+            continue
         original_result = validate_inspection(old[obj['id']]['inspection'], phase='initial')
         original_bundle = validate_bundle(original_result['bundle'])
         task = prepare(assets, root, binding(source, candidate, obj, doc, pages=selected, rendered_view=row.get('rendered_view')), phase='final',

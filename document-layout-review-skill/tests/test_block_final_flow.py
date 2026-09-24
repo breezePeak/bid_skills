@@ -23,7 +23,9 @@ def module(monkeypatch,name,**items):
 
 def setup_final(tmp_path,monkeypatch):
     src=tmp_path/'source.docx';d=Document();d.add_paragraph('工期30天');d.save(src)
-    work=tmp_path/'work';bp.initialize(src,work,{'renderer':'auto','field_engine':'auto','template':str(src),'template_style_json':'style','text_rules':'rules'})
+    style=tmp_path/'style.json';bp.write_json(style,{})
+    rules=tmp_path/'rules.json';bp.write_json(rules,{'body':{}})
+    work=tmp_path/'work';bp.initialize(src,work,{'renderer':'auto','field_engine':'auto','template':str(src),'template_style_json':str(style),'text_rules':str(rules)})
     bp.accept_global(work,bp.load(work)['current'],'全局规则核对')
     bp.checkpoint(work,'B0001',bp.load(work)['current'],'当前块核对')
     state=bp.load(work);reports=work/'reports';reports.mkdir(exist_ok=True)
@@ -63,6 +65,7 @@ def setup_final(tmp_path,monkeypatch):
     module(monkeypatch,'render_docx',validate_render=lambda *a,**k:None)
     module(monkeypatch,'figure_inspection',ledger=lambda s,p:{'path':str(p),'sha256':bp.sha(p)})
     module(monkeypatch,'numbering_policy',Doc=lambda p:p,inventory=lambda d:[])
+    module(monkeypatch,'review_objects',inventory=lambda d:[])
     args=types.SimpleNamespace(retry_final=False)
     return work,calls,fail,args
 
@@ -160,6 +163,7 @@ def test_partial_caption_plans_are_accumulated_across_blocks(tmp_path,monkeypatc
 def test_local_known_bad_picture_cannot_advance_unchanged(tmp_path,monkeypatch):
     initial=tmp_path/'initial.json';bp.write_json(initial,{'objects':[{'id':'F0001','object_sha256':'original','checks':{'text_inside_bounds':'fail'}}]})
     module(monkeypatch,'numbering_policy',Doc=lambda p:p,inventory=lambda d:[{'id':'F0001','hash':'original'}])
+    module(monkeypatch,'review_objects',inventory=lambda d:[{'id':'F0001','hash':'original'}])
     module(monkeypatch,'visual_evidence',INTRINSIC={'text_inside_bounds'},validate_inspection=lambda *a:None,validate_bundle=lambda *a:None,checked_file=lambda *a:None,normalized_image=lambda *a:None,pixel_sha=lambda *a:None)
     with pytest.raises(bp.BlockError,match='尚未实际修复'):
         bw.require_local_image_change({'initial_review':str(initial)},{'figures':['F0001']},tmp_path/'candidate.docx')

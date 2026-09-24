@@ -79,6 +79,7 @@ def reuse_source_content(source, candidate, obj, row, doc, original_row, pages, 
 def validate_table_coverage(candidate, visual, pages):
     """Every actual table is checked, not only rows flagged by a heuristic auditor."""
     from numbering_policy import Doc, inventory, PolicyError
+    from review_objects import inventory
     expected = {o['id']:o for o in inventory(Doc(candidate)) if o['kind']=='table'}
     rows = visual.get('table_objects', [])
     if not isinstance(rows,list) or len(rows)!=len(expected) or {r.get('id') for r in rows}!=set(expected):

@@ -12,7 +12,7 @@ $restoreApp = @{}; $restoreOptions = @{}
 $name = if ($Engine -eq 'word') {'Microsoft Word'} else {'WPS Writer'}
 $progId = if ($Engine -eq 'word') {'Word.Application'} else {'KWPS.Application'}
 $result = @{status='failed'; engine=$name; mode=$Mode; fields_updated=$false;
-            indexes_updated=$false; errors=@(); error_code='office-worker-failed'}
+            indexes_updated=$false; errors=@(); warnings=@(); operation_status='failed'; cleanup_status='pending'; error_code='office-worker-failed'}
 function Set-AppOption($key, $value) {
   $restoreApp[$key] = $app.$key
   $app.$key = $value
@@ -88,26 +88,30 @@ try {
     if (-not (Test-Path -LiteralPath $outputFull -PathType Leaf)) { throw 'Office produced no output file.' }
     if ((Get-Item -LiteralPath $outputFull).Length -eq 0) { throw 'Office produced an empty output file.' }
   }
-  $result.status='passed'; $result.error_code=$null
+  $result.status='passed'; $result.operation_status='passed'; $result.error_code=$null
 } catch {
   $result.errors=@($_.Exception.Message)
 } finally {
   # Cleanup failures must still produce a diagnostic report. Never taskkill by image name.
   if ($null -ne $doc) {
-    try { $doc.Close(0) } catch { $result.status='failed'; $result.errors+=('Close: '+$_.Exception.Message) }
+    try { $doc.Close(0) } catch { $result.warnings+=('Close: '+$_.Exception.Message) }
     try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) } catch {}
   }
   if ($null -ne $app) {
     if ($owned) {
-      foreach ($key in $restoreOptions.Keys) { try { $app.Options.$key=$restoreOptions[$key] } catch {} }
-      foreach ($key in $restoreApp.Keys) { try { $app.$key=$restoreApp[$key] } catch {} }
+      foreach ($key in $restoreOptions.Keys) { try { $app.Options.$key=$restoreOptions[$key] } catch { $result.warnings+=('Restore option: '+$key) } }
+      foreach ($key in $restoreApp.Keys) { try { $app.$key=$restoreApp[$key] } catch { $result.warnings+=('Restore application option: '+$key) } }
       try {
         if ($app.Documents.Count -eq 0) { $app.Quit() }
-        else { $result.status='failed'; $result.errors+=('Office now contains another document; application left open.') }
-      } catch { $result.status='failed'; $result.errors+=('Quit: '+$_.Exception.Message) }
+        else { $result.warnings+=('Office now contains another document; application left open.') }
+      } catch { $result.warnings+=('Quit: '+$_.Exception.Message) }
     }
     try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($app) } catch {}
   }
+  $result.cleanup_status = if ($result.warnings.Count -gt 0) {'warning'} else {'passed'}
+  # A cleanup warning never establishes output validity. Python still validates
+  # the saved ZIP/PDF, field results and content before accepting the operation.
+  $result.output_validation_required = ($Mode -ne 'probe')
   $parent = Split-Path -Parent ([IO.Path]::GetFullPath($ReportPath))
   [void][IO.Directory]::CreateDirectory($parent)
   $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ReportPath -Encoding UTF8

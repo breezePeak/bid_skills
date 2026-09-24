@@ -153,7 +153,7 @@ def test_reopen_only_one_block(case):
 def test_paragraph_insertion_does_not_change_later_ids(case):
     _, work, root = case
     state = bp.load(work); parts, doc, body = bp.package(state['current'])
-    p = E.Element(bp.Q('p')); r = E.SubElement(p, bp.Q('r')); E.SubElement(r, bp.Q('t')).text = '新增题注示例'
+    p = E.Element(bp.Q('p')); r = E.SubElement(p, bp.Q('r')); E.SubElement(r, bp.Q('t')).text = ''  # Empty layout paragraph; new business text is not authorized.
     body.insert(1, p); parts[bp.DOC] = xml(doc)
     out = root / 'insert.docx'; save_parts(out, parts)
     bp.checkpoint(work, 'B0001', out, '当前块增加一段，其他对象保持原样。')
@@ -236,7 +236,7 @@ def test_global_setup_cannot_rewrite_body(tmp_path):
         bp.accept_global(w, out, '错误操作')
 
 
-def test_footnote_creation_local(case):
+def test_unplanned_footnote_creation_rejected_locally(case):
     _, work, root = case
     state = bp.load(work); parts, doc, body = bp.package(state['current'])
     r = E.SubElement(body[0], bp.Q('r')); E.SubElement(r, bp.Q('footnoteReference'), {bp.Q('id'): '1'})
@@ -249,8 +249,9 @@ def test_footnote_creation_local(case):
     E.SubElement(ct, '{' + ctns + '}Override', PartName='/word/footnotes.xml', ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml')
     parts.update({bp.DOC: xml(doc), bp.RELS: xml(rels), '[Content_Types].xml': xml(ct), 'word/footnotes.xml': xml(notes)})
     out = root / 'foot.docx'; save_parts(out, parts)
-    bp.checkpoint(work, 'B0001', out, '把当前块脚注转为原生引用。')
-    assert bp.next_block(work)['completed'] == 1
+    with pytest.raises(bp.BlockError, match='当前块检查失败'):
+        bp.checkpoint(work, 'B0001', out, '把当前块脚注转为原生引用。')
+    assert bp.next_block(work)['completed'] == 0
 
 
 def test_release_binding_requires_all_blocks(case):
@@ -412,7 +413,7 @@ def test_unfinished_blocks_cannot_enter_final(case):
 
 def test_resume_reads_existing_state_without_whole_repair(case, monkeypatch, capsys):
     _, work, root = case
-    state = bp.load(work); state['objects_initialized'] = True
+    state = bp.load(work); state['objects_initialized'] = True; state['object_inventory_version'] = 2
     state['settings'].update(renderer='auto', field_engine='auto', uno_python=None)
     bp.write_json(work / bp.STATE, state)
     assert bw.main(['--work-dir', str(work)]) == 0

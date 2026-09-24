@@ -17,6 +17,8 @@ import tempfile
 import socket
 import zipfile
 from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 from lxml import etree as ET
 
@@ -27,6 +29,28 @@ Q = lambda name: '{' + W + '}' + name
 DOC = 'word/document.xml'
 RELS = 'word/_rels/document.xml.rels'
 STATE = 'block-state.json'
+_PACKAGE_CACHE = ContextVar('dlr_package_cache', default=None)
+
+
+@contextmanager
+def package_session():
+    """One command's immutable-input cache; never retained across commands."""
+    active = _PACKAGE_CACHE.get()
+    token = _PACKAGE_CACHE.set({}) if active is None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _PACKAGE_CACHE.reset(token)
+
+
+def cached_operation(action):
+    @wraps(action)
+    def wrapped(*args, **kwargs):
+        with package_session():
+            return action(*args, **kwargs)
+    return wrapped
+
 
 
 class BlockError(ValueError):
@@ -79,6 +103,13 @@ def same_part(a, b, name):
 
 
 def package(path):
+    # Readers must not mutate these trees. All edits use a separate proposal.
+    path = Path(path).resolve()
+    stat = path.stat()
+    key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    cache = _PACKAGE_CACHE.get()
+    if cache is not None and key in cache:
+        return cache[key]
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         if len(set(names)) != len(names) or archive.testzip():
@@ -92,7 +123,10 @@ def package(path):
     body = root.find(Q('body'))
     if body is None:
         raise BlockError('DOCX 缺少正文。')
-    return parts, root, body
+    result = (parts, root, body)
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
 def visible(element):
@@ -172,6 +206,24 @@ def make_blocks(path, target_chars=1800, max_paragraphs=14):
         types = set(kinds[i:j])
         groups.append([i, j, 'object' if types & {'table', 'figure', 'container'} else 'text'])
         i = j
+    # Complex fields (notably a TOC) can span paragraphs: never cut their
+    # begin/separate/end boundary just to satisfy a viewing-window budget.
+    intervals=[]; depth=0; start=None
+    for index,n in enumerate(nodes):
+        for field in n.iter(Q('fldChar')):
+            kind=field.get(Q('fldCharType'))
+            if kind=='begin':
+                if depth==0:start=index
+                depth+=1
+            elif kind=='end' and depth:
+                depth-=1
+                if depth==0:intervals.append((start,index+1))
+    if depth:intervals.append((start,len(nodes)-(1 if nodes and nodes[-1].tag==Q('sectPr') else 0)))
+    for start,end in intervals:
+        overlap=[i for i,g in enumerate(groups) if g[0]<end and g[1]>start]
+        if overlap:
+            lo,hi=overlap[0],overlap[-1]
+            groups[lo:hi+1]=[[groups[lo][0],groups[hi][1],'object']]
     spans = []
     for a, b, typ in groups:
         if spans and typ == spans[-1][2] == 'text' and spans[-1][1] == a:
@@ -268,6 +320,7 @@ def _initialize_unlocked(source, work, settings=None, **budgets):
     return state
 
 
+@cached_operation
 def initialize(source,work,settings=None,**budgets):
     Path(work).mkdir(parents=True,exist_ok=True)
     with session_lock(work):
@@ -308,11 +361,11 @@ def load(work):
     return state
 
 
-def validate_blocks(state):
+def validate_blocks(state, *, document=None):
     blocks = state.get('blocks')
     if not isinstance(blocks, list) or len({b.get('id') for b in blocks}) != len(blocks):
         raise BlockError('分块清单缺失或存在重复 ID。')
-    parts, _, body = package(state['current'])
+    parts, _, body = document if document is not None else package(state['current'])
     coverage = set()
     for block in blocks:
         part = block.get('part', DOC)
@@ -343,6 +396,7 @@ def block_by_id(state, ident):
     return found[0]
 
 
+@cached_operation
 def next_block(work, view_offset=0, view_size=14):
     if view_offset < 0 or not 1 <= view_size <= 100:
         raise BlockError('查看窗口参数无效。')
@@ -559,34 +613,82 @@ def global_scope(before, after):
             raise BlockError('全局准备改变了正文对象的关系。')
 
 
+def sync_stories(state, old_parts, new_parts):
+    """Update existing ranges as well as newly-created stories, before committing."""
+    story_re = r'word/(?:header[^/]*|footer[^/]*|footnotes|endnotes)\.xml'
+    ids = {b['id'] for b in state['blocks']}
+    for part in sorted(set(old_parts) | set(new_parts)):
+        if not re.fullmatch(story_re, part):
+            continue
+        matches = [b for b in state['blocks'] if b.get('part', DOC) == part]
+        size = len(parse(new_parts[part])) if part in new_parts else 0
+        if not size:
+            # A global template operation can remove a whole unused header part.
+            state['blocks'] = [b for b in state['blocks'] if b.get('part', DOC) != part]
+            continue
+        if len(matches) > 1:
+            raise BlockError('附属内容块重复，不能保存不一致的进度。')
+        changed = not same_part(old_parts.get(part), new_parts.get(part), part)
+        if matches:
+            block = matches[0]
+            block.update(start=0, end=size)
+            if changed:
+                block.update(status='pending', note='附属内容已改变，须复核当前内容')
+                block.pop('local_audit', None)
+        else:
+            n = 1
+            while f'B{n:04d}' in ids:
+                n += 1
+            ident = f'B{n:04d}'; ids.add(ident)
+            state['blocks'].append({'id':ident, 'part':part, 'kind':'story', 'start':0, 'end':size,
+                'source_start':0, 'source_end':len(parse(old_parts[part])) if part in old_parts else 0,
+                'status':'pending', 'note':'新增附属内容须检查', 'preview':part})
+
+
 def _save_revision(work, state, proposal, event):
-    work = Path(work)
+    work = Path(work); proposal = Path(proposal)
+    proposed_hash = sha(proposal)
+    old_parts, _, _ = package(state['current'])
+    document = package(proposal)
+    local_receipt=block_by_id(state,event['block']).get('local_audit') if event.get('action')=='block' else None
+    sync_stories(state, old_parts, document[0])
+    # checkpoint has already checked the current story's new content.
+    if event.get('action') == 'block':
+        block_by_id(state, event['block']).update(status='checked', note=event['note'])
+        if local_receipt:block_by_id(state,event['block'])['local_audit']=local_receipt
+    validate_blocks(state, document=document)
     state['revision'] += 1
-    proposal = Path(proposal)
-    unchanged = sha(proposal) == state['current_sha256']
+    unchanged = proposed_hash == state['current_sha256']
     out = Path(state['current']) if unchanged else work / 'checkpoints' / f"r{state['revision']:06d}.docx"
-    if out.exists():
-        if sha(out) != sha(proposal):
-            raise BlockError('存在未完成的不同内容检查点；请先核对，不覆盖它。')
-    else:
-        shutil.copyfile(proposal, out)
-    state['current'], state['current_sha256'] = str(out.resolve()), sha(out)
-    parts,_,_ = package(out)
-    covered = {b.get('part',DOC) for b in state['blocks']}
-    for part in sorted(parts):
-        if re.fullmatch(r'word/(?:header[^/]*|footer[^/]*|footnotes|endnotes)\.xml',part) and part not in covered:
-            root = parse(parts[part])
-            if len(root):
-                state['blocks'].append({'id':f"B{len(state['blocks'])+1:04d}",'part':part,'kind':'story','start':0,'end':len(root),'source_start':0,'source_end':0,'status':'pending','note':'新建附属内容须检查','preview':part})
+    created = False
+    if not out.exists():
+        fd, tmp = tempfile.mkstemp(dir=out.parent, suffix='.docx')
+        os.close(fd)
+        try:
+            shutil.copyfile(proposal, tmp)
+            if sha(tmp) != proposed_hash or sha(proposal) != proposed_hash:
+                raise BlockError('拟稿在提交期间发生变化，未采纳。')
+            os.replace(tmp, out); created = True
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+    elif sha(out) != proposed_hash:
+        raise BlockError('存在未完成的不同内容检查点；请先核对，不覆盖它。')
+    state['current'], state['current_sha256'] = str(out.resolve()), proposed_hash
     if state.get('final'):
         state['previous_final'] = state['final']
     state['final'] = None
     state.pop('final_attempt', None)
-    state['history'].append({'revision': state['revision'], **event})
-    write_json(work / STATE, state)
+    state['history'].append({'revision':state['revision'], **event})
+    try:
+        write_json(work / STATE, state)
+    except Exception:
+        if created:
+            out.unlink(missing_ok=True)
+        raise
     return state
 
 
+@cached_operation
 def accept_global(work, proposal, note):
     if not note.strip():
         raise BlockError('请记录实际全局检查/修改结果。')
@@ -599,6 +701,7 @@ def accept_global(work, proposal, note):
         return _save_revision(work, state, proposal, {'action': 'global', 'note': note})
 
 
+@cached_operation
 def checkpoint(work, ident, proposal, note):
     if not note.strip():
         raise BlockError('请记录当前块实际检查了什么、改了什么。')
@@ -613,6 +716,9 @@ def checkpoint(work, ident, proposal, note):
         if first['id'] != ident:
             raise BlockError('请先处理当前待修块；不得跳过前面的块。')
         delta, changes = local_scope(state['current'], proposal, block)
+        from block_checks import check_local
+        result = check_local(state, block, proposal, delta)
+        block['local_audit'] = result
         block['end'] += delta
         at = state['blocks'].index(block)
         for other in state['blocks'][at + 1:]:
@@ -620,24 +726,12 @@ def checkpoint(work, ident, proposal, note):
                 other['start'] += delta
                 other['end'] += delta
         block.update(status='checked', note=note)
-        proposal_parts, _, _ = package(proposal)
-        covered = {b.get('part', DOC) for b in state['blocks']}
-        for part in sorted(proposal_parts):
-            if re.fullmatch(r'word/(?:header[^/]*|footer[^/]*|footnotes|endnotes)\.xml', part) and part not in covered:
-                root = parse(proposal_parts[part])
-                if len(root):
-                    state['blocks'].append({'id': f"B{len(state['blocks'])+1:04d}", 'part':part, 'kind':'story', 'start':0, 'end':len(root), 'source_start':0, 'source_end':0, 'status':'pending', 'note':'新增附属内容需要检查', 'preview':part})
-        for other in state['blocks']:
-            part = other.get('part', DOC)
-            if other['kind'] == 'story' and part in proposal_parts:
-                other['end'] = len(parse(proposal_parts[part]))
-                if part in changes and other is not block:
-                    other['status'] = 'pending'
         if changes:
             state['boundary_dirty'] = sorted(set(state['boundary_dirty']) | {b['id'] for b in state['blocks'][max(0, at-1):at+2]})
         return _save_revision(work, state, proposal, {'action': 'block', 'block': ident, 'note': note, 'parts_changed': changes})
 
 
+@cached_operation
 def reopen(work, ident, reason):
     if not reason.strip():
         raise BlockError('返回修复需要具体问题，不能无故重跑。')
@@ -716,6 +810,7 @@ def story_scope(before, after, block):
     return len(parse(new[part])) - len(parse(old[part])), sorted(changed)
 
 
+@cached_operation
 def accept_shared_repair(work, proposal, reason):
     """Explicit late shared-format fix: retain content progress; invalidate final QA."""
     if not reason.strip():

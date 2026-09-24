@@ -199,18 +199,23 @@ def test_failed_audit_is_not_reused_as_pass(cached_script):
     assert len(calls)==2
 
 
-def test_execution_only_reconfiguration_preserves_completed_blocks(tmp_path,capsys):
+def test_execution_only_reconfiguration_preserves_completed_blocks(tmp_path,capsys,monkeypatch):
     _,work=fixture(tmp_path);st=bp.load(work)
-    st['objects_initialized']=True;st['settings'].update(renderer='auto',field_engine='auto',uno_python=None)
+    st['objects_initialized']=True;st['object_inventory_version']=2;st['settings'].update(renderer='auto',field_engine='auto',uno_python=None)
     bp.write_json(work/bp.STATE,st)
     bp.checkpoint(work,st['blocks'][0]['id'],st['current'],'已核对')
+    # Exercise configuration persistence; no native Office claim.
+    import types
+    monkeypatch.setitem(sys.modules,'runtime_preflight',types.SimpleNamespace(check=lambda *a,**k:{'status':'passed','field_engine':{}}))
+    st=bp.load(work);st['settings'].update(template=str(tmp_path/'unused-template'),template_style_json=str(tmp_path/'unused-style'))
+    bp.write_json(work/bp.STATE,st)
     assert bw.main(['--work-dir',str(work),'--action','configure','--renderer','libreoffice'])==0
     result=json.loads(capsys.readouterr().out)
     assert result['completed']==1 and bp.load(work)['settings']['renderer']=='libreoffice'
 
 
 def test_effective_rules_cannot_be_silently_switched_on_resume(tmp_path,capsys):
-    _,work=fixture(tmp_path);st=bp.load(work);st['objects_initialized']=True
+    _,work=fixture(tmp_path);st=bp.load(work);st['objects_initialized']=True;st['object_inventory_version']=2
     st['settings'].update(renderer='word',field_engine='word',uno_python=None);bp.write_json(work/bp.STATE,st)
     assert bw.main(['--work-dir',str(work),'--renderer','wps'])==2
     assert json.loads(capsys.readouterr().out)['status']=='blocked'

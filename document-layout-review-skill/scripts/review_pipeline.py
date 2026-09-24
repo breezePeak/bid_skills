@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from render_docx import validate_render
 from numbering_policy import Doc, PolicyError, file_digest, inventory, public_inventory
+from review_objects import inventory, public_inventory
 from figure_review import make_review_template, validate_initial
 from field_refresh import refresh, validate_report, safe_fields
 from runtime_preflight import check as runtime_check, validate_docx, PreflightError
@@ -101,15 +102,15 @@ def check_gates(candidate,template,style_json,rules_file,rules_hash,reports,obje
     gate('hard-text','hard_text_audit.py',[candidate],lambda d:d.get('status')=='passed')
     gate('structure','docx_audit.py',[candidate],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
     gate('template-text','template_usage_audit.py',[template,candidate,'--text-rules',rules_file],lambda d:d.get('status')=='passed' and d.get('text_rules_sha256')==rules_hash)
-    gate('template-structure','template_conformance.py',[template,candidate],lambda d:d.get('status')=='passed')
-    gate('table-template','template_table_style.py',['audit',candidate,'--template',template,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
+    gate('template-structure','stable_template_audit.py',[template,candidate],lambda d:d.get('status')=='passed')
+    gate('table-template','stable_table_audit.py',['audit',candidate,'--template',template,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
     gate('table-layout','table_layout_audit.py',[candidate,'--template-style-json',style_json],lambda d:not any(i.get('severity')=='error' for i in d.get('issues',[])))
     gate('template-effective-format','template_format_contract.py',[template,candidate,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
     gate('table-layout-template','template_layout_contract.py',[template,candidate,'--template-style-json',style_json],lambda d:d.get('status')=='passed')
     gate('content-integrity','content_integrity.py',[source,candidate,'--content-plan',content_plan],lambda d:d.get('status')=='passed')
     rows=validate_initial(source,initial)
     actual=[o for o in inventory(Doc(candidate)) if o['kind']=='figure']
-    data={'status':'passed' if {o['id'] for o in actual}==set(rows) else 'failed','objects':public_inventory(Doc(candidate)),'final_visual_review_required':bool(actual)}
+    data={'status':'passed' if {o['id'] for o in actual}==set(rows) else 'failed','objects':public_inventory(Doc(candidate)),'inventory_status':'complete','visual_status':'pending' if actual else 'not_applicable','final_visual_review_required':bool(actual),'meaning':'仅清单覆盖通过；不表示图片内容检查通过'}
     report=reports/'gate-image-inventory.json';write_json(report,data)
     gates.append({'id':'image-inventory','passed':data['status']=='passed','report':str(report),'report_sha256':file_digest(report),'result':data})
     try:data=validate_report(candidate,field_report);ok=True

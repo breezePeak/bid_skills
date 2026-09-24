@@ -12,7 +12,7 @@ from block_progress import sha, read_json, write_json
 
 def code_digest(scripts):
     digest = hashlib.sha256()
-    for p in sorted(Path(scripts).glob('*.py')):
+    for p in sorted(p for p in Path(scripts).iterdir() if p.is_file() and p.suffix in {'.py','.ps1'}):
         digest.update(p.name.encode()); digest.update(p.read_bytes())
     return digest.hexdigest()
 

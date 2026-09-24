@@ -8,7 +8,7 @@
 
 ## 执行方式
 
-继续使用已授权的宿主视觉适配器。`visual_evidence.py` 将真实图片字节送入适配器，不以路径、OCR 文本或假回执代替图片。`--vision-worker-config worker.json` 指定命令配置；可选 HTTP 适配器的环境变量仍为 `DLR_VISION_API_URL`、`DLR_VISION_MODEL`、`DLR_VISION_API_KEY`。没有默认外部服务，不自动发送投标资料给新供应商。
+优先使用已授权的视觉适配器；未配置适配器时，自动生成 `awaiting_host_visual` 任务，使用宿主自身的看图工具。`visual_evidence.py` 将真实图片字节送入适配器，不以路径、OCR 文本或假回执代替图片。`--vision-worker-config worker.json` 指定命令配置；可选 HTTP 适配器的环境变量仍为 `DLR_VISION_API_URL`、`DLR_VISION_MODEL`、`DLR_VISION_API_KEY`。没有默认外部服务，不自动发送投标资料给新供应商。
 
 初检按当前块触发，一次真实调用覆盖当前图的必要视图。正常图不预先等待全文图片检查。终检协议为 `dlr-visual-v2`，需要重新看图时执行一次当前对象检查；有不确定或未修复问题就失败，不按固定调用次数判合格。
 
@@ -30,4 +30,21 @@
 
 按一两页窗口看实际最终页面，不能只看缩略拼图。每一页保留实际观察；每张实际表格都记录当前对象和所在页面、列宽/跨页/语义结果，而非只处理表格审计候选。脚本校验覆盖和结果绑定，不宣称能独立证明模型看清了图。
 
-手工修改 `overall_status`、图片检查项或文件哈希不能使缺失/失败证据变成有效结果。没有可执行视觉接口时可以继续定位问题，但不能伪造正式检查回执。适配器接入、真实模型识别能力和 Word/WPS 兼容性必须在实际宿主验证；单元测试不代替这些验证。
+手工修改 `overall_status`、图片检查项或文件哈希不能使缺失/失败证据变成有效结果。没有自动视觉接口不等于宿主不能看图；走下述宿主路径。两条路径都不可执行时保留待检查，不能伪造正式检查回执。适配器接入、真实模型识别能力和 Word/WPS 兼容性必须在实际宿主验证；单元测试不代替这些验证。
+
+## 宿主看图路径
+
+`inspect-initial` / `inspect-repaired` / `inspect-final` 未传 worker 配置时返回任务和真实图片路径，不自动判定通过。Agent 使用宿主看图工具实际查看列出的图片，按任务 `request.json` 的检查结构保存响应，并记录真实的工具名称、会话/工具调用引用及所查看图片 ID、哈希。用户不需要填写这些记录。
+
+```bash
+python scripts/host_visual.py <task.json> <response.json> <tool-log.json>
+# 随后重试原来的 inspect-* 命令，程序导入已完成结果，不重新调用模型。
+```
+
+`tool-log.json` 结构为 `request_id` 与 `tool_calls`；每项含 `tool`、`reference`、`images`，图片项含 `id`、`sha256`。所有标识从任务复制。必须来源于实际工具使用，不造日志；本地记录检查只验证覆盖和新鲜度，不是防恶意伪造的宿主签名。原失败结果不可覆盖；图像真实修复后生成新任务。
+
+## 修图前与修图后
+
+初检完成后，对需要改图内内容的块执行 `--action image-plan`，从当前真实缺陷获得对象级修复范围；正常图只调整必要布局。修图后执行 `--action inspect-repaired --proposal block-fixed.docx`，先检查新图与原图语义，再提交 checkpoint。局部失败不允许靠重复检查同一像素消除。
+
+原生 Shape 的局部复查会返回 `native-review.json` 和所需的 `native-review.bound.json` 路径。沿用 `figure_review.py bind-rendered` 绑定当前拟稿的真实渲染及裁片，再继续；不是将无媒体对象直接豁免。正文外对象的 ID 包含部件前缀，例如 `S_header1_F0001`，不要自行拼造 ID。
