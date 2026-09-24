@@ -12,7 +12,7 @@ python scripts/review_pipeline.py input.docx --work-dir work
 
 上传模板追加 `--template template.docx`；已确认的模板约定追加 `--template-style-json template.style.json`；正文覆盖追加 `--text-rules text-rules.json`。实际文件名和路径从本次任务读取，不凭示例猜测。
 
-程序要求 `requires_image_review` 时，Agent 查看完整原图和必要局部，完成 `work/reports/initial-visual-review.json`。有缺题注、豁免或编号语义需要定位时，按真实对象生成 `object-plan.json`/`numbering-plan.json`。随后仍以原始输入执行，带上 `--initial-visual-review` 及存在的相应计划；不要传不存在的占位文件，也不要让用户代填内部记录。
+程序要求 `requires_image_review` 时，按 `references/visual-inspection.md` 实际调用宿主视觉接口，生成绑定原图及完整/局部/边缘视图的初检结果，不手填 PASS。配置好 `--vision-worker-config` 时入口会自动执行初检。有缺题注、豁免或编号语义需要定位时，按真实对象生成 `object-plan.json`/`numbering-plan.json`。随后仍以原始输入执行，带上 `--initial-visual-review` 及存在的相应计划；不要传不存在的占位文件，也不要让用户代填内部记录。
 
 默认 `--renderer auto` 与 `--field-engine auto`，分别按 **Word → WPS → LibreOffice** 顺序选择可调用引擎；渲染失败会按顺序重试。明确指定某引擎时只执行该引擎，不静默降级；只指定 `--field-engine word` 并不等于限定渲染器，要求两者都是 Word 时同时传 `--renderer word --field-engine word`。环境可用和初检完成均不是验收通过。依赖、记录及失败处理见 `rendering-engines.md`。
 
@@ -62,7 +62,7 @@ python scripts/review_pipeline.py refreshed.docx --work-dir work --audit-only --
 
 ## 5. 最后验收和交付
 
-程序复核完成后，依据最新 `work/reports/final-visual-review.template.json` 的现有结构填写实际观察，保存为 `final-visual-review.json`。页面、图片和表格 review 都必须核对当前内容；不能复制旧 PASS。若发现任何问题，先回到对应修复，不执行发布。
+程序复核完成后，依据最新 `work/reports/final-visual-review.template.json` 定位各图当前所在页，通过 `figure_review.py inspect-final` 执行两次从零检查并写入真实调用证据，随后补齐逐页和表格实际观察。具体命令见 `references/visual-inspection.md`。页面、图片和表格 review 都必须核对当前内容；不能复制旧 PASS。保留清单中原文绑定的 `image_discovery_ledger`，后续新发现也必须实际修复并复查关闭。若发现任何问题，先回到对应修复，不执行发布。
 
 所有明确标准都满足后：
 

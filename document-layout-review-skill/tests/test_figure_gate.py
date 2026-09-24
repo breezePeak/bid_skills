@@ -1,6 +1,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
 from test_numbering_policy import Fixtures, rewrite
@@ -25,7 +26,18 @@ class FigureGate(Fixtures):
                                      'resolved_initial_defects':[],'pages':[{'name':page.name,'sha256':pages[0]['sha256']}]})
         return initial,final,pages
 
-    def verify(self,initial,final,pages):return f.validate_final(self.source,self.out,initial,final,pages)
+    def verify(self,initial,final,pages):
+        # Legacy tests isolate inventory, scope and initial-defect closure. Their
+        # hand-authored fixtures are NOT vision evidence. The executable evidence
+        # contract is exercised separately by test_visual_evidence.py.
+        with patch('figure_inspection.verify_row', return_value={}), patch('figure_inspection.late_findings', return_value={'issue_ids': [], 'authorizes_change': False}):
+            return f.validate_final(self.source,self.out,initial,final,pages)
+
+    def test_plain_pass_checklist_rejected_without_mocked_evidence_boundary(self):
+        a,b,p=self.data()
+        with self.assertRaises(n.PolicyError) as error:
+            f.validate_final(self.source,self.out,a,b,p)
+        self.assertEqual(error.exception.code, 'visual-evidence-missing')
 
     def test_all_actual_images_have_review_entries(self):
         initial,final,pages=self.data();self.assertEqual(self.verify(initial,final,pages)['figure_count'],2)

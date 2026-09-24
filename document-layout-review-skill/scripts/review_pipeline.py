@@ -7,6 +7,7 @@ never reruns broad repairs that could undo a reviewed diagram or pagination.
 from __future__ import annotations
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,7 @@ def main():
     ap.add_argument('--template',type=Path);ap.add_argument('--template-style-json',type=Path)
     ap.add_argument('--text-rules',type=Path);ap.add_argument('--numbering-plan',type=Path);ap.add_argument('--object-plan',type=Path)
     ap.add_argument('--initial-visual-review',type=Path)
+    ap.add_argument('--vision-worker-config',type=Path,default=os.environ.get('DLR_VISION_WORKER_CONFIG'),help='已授权视觉模型/宿主子代理的命令适配器 JSON；不自动选择远程服务')
     ap.add_argument('--audit-only',action='store_true');ap.add_argument('--source',type=Path,help='audit-only 时必须指向原始 Word，而不是修改后的候选')
     ap.add_argument('--field-engine',choices=['auto','word','wps','libreoffice'],default='auto')
     ap.add_argument('--renderer',choices=['auto','word','wps','libreoffice'],default='auto')
@@ -126,7 +128,7 @@ def main():
     ap.add_argument('--uno-python',help='可导入 uno 的 Python；不指定时自动探测')
     ap.add_argument('--content-plan',type=Path,help='继续验收时沿用原始文件绑定的内容保护计划')
     args=ap.parse_args()
-    for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','source','field_update_report','content_plan'):
+    for key in ('input','work_dir','template','template_style_json','text_rules','numbering_plan','object_plan','initial_visual_review','vision_worker_config','source','field_update_report','content_plan'):
         val=getattr(args,key)
         if val is not None:setattr(args,key,val.resolve())
     args.work_dir.mkdir(parents=True,exist_ok=True)
@@ -163,7 +165,12 @@ def main():
             initial=reports/'initial-visual-review.json';write_json(initial,prepared)
             if prepared['objects']:
                 write_json(reports/'object-inventory.json',{'version':1,'source_sha256':file_digest(source),'objects':public_inventory(Doc(source))})
-                result={'status':'requires_image_review','review':str(initial),'inventory':str(reports/'object-inventory.json'),'message':'Agent 先逐张查看真实原图、填写初检和缺题注语义计划，再继续；不是让用户手填。'}
+                if args.vision_worker_config is not None:
+                    from figure_inspection import inspect_initial
+                    prepared=inspect_initial(source,prepared,args.vision_worker_config,reports/'initial-inspections')
+                    write_json(initial,prepared)
+                    validate_initial(source,initial)
+                result={'status':'requires_image_review','review':str(initial),'inventory':str(reports/'object-inventory.json'),'message':'Agent 使用 figure_review.py inspect-initial 完成真实视觉调用并补齐缺题注语义计划后继续；不能手填 PASS。已传视觉配置时初检已自动调用，先读实际缺陷。'}
                 write_json(args.work_dir/'review-manifest.json',result)
                 print(json.dumps(result,ensure_ascii=False,indent=2));return 4
         validate_initial(source,initial)
@@ -243,7 +250,9 @@ def main():
             except Exception as exc:
                 render_data['validation_error'] = exc.as_issue() if hasattr(exc,'as_issue') else {'message':str(exc)}
         ok=all(g['passed'] for g in gates) and render_valid
-        manifest={'version':5,'renderer_requested':args.renderer,'field_engine_requested':args.field_engine,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
+        from figure_inspection import ledger
+        discovery_ref=ledger(source,reports/'image-discoveries.json')
+        manifest={'image_discovery_ledger':discovery_ref,'version':5,'renderer_requested':args.renderer,'field_engine_requested':args.field_engine,'status':'awaiting_visual_review' if ok else 'failed','source':str(source.resolve()),'source_sha256':file_digest(source),
                   'candidate':str(candidate.resolve()),'candidate_sha256':file_digest(candidate),'template':str(template.resolve()),'template_sha256':file_digest(template),
                   'template_style_json':str(style_json.resolve()),'template_style_sha256':file_digest(style_json),
                   'text_rules':str(rules_file.resolve()),'text_rules_sha256':rules_hash,'text_rules_file_sha256':file_digest(rules_file),
@@ -251,16 +260,17 @@ def main():
                   'runtime_preflight':str(preflight_file.resolve()),'runtime_preflight_sha256':file_digest(preflight_file),'object_plan':str(object_plan.resolve()) if object_plan else None,
                   'initial_visual_review':str(initial.resolve()),'initial_visual_review_sha256':file_digest(initial),'stages':stages,'gates':gates,
                   'render':{'passed':render_valid,'run':render_run,'data':render_data,'pages':pages},
-                  'next':'Agent 逐张对照原图/新图并逐页终检。初检出框、重叠、内嵌题注等缺陷必须关闭；只改报告不能放行。最后使用 finalize_review.py。'}
+                  'next':'Agent 定位每张图的当前页面，再用 figure_review.py inspect-final 进行两次独立完整盲检；先前通过不豁免新发现。缺陷台账须闭合，逐页与表格检查仍必需。最后使用 finalize_review.py。'}
         write_json(args.work_dir/'review-manifest.json',manifest)
         final_template={'overall_status':'pending','candidate_sha256':file_digest(candidate),'pages':[{'name':p['name'],'sha256':p['sha256'],'status':'pending','observations':''} for p in pages],
-                        'figures':{'version':1,'source_sha256':file_digest(source),'candidate_sha256':file_digest(candidate),'objects':[]},'table_reviews':[]}
+                        'figures':{'version':2,'source_sha256':file_digest(source),'candidate_sha256':file_digest(candidate),'objects':[]},'table_reviews':[]}
         initial_rows=validate_initial(source,initial)
         for obj in inventory(Doc(candidate)):
             if obj['kind']!='figure':continue
             old=initial_rows.get(obj['id'],{})
             final_template['figures']['objects'].append({'id':obj['id'],'object_sha256':obj['hash'],'source_object_sha256':old.get('object_sha256'),
                 'image_type':old.get('image_type'),'observation':'','checks':{key:'pending' for key in old.get('checks',{})},
+                'inspection':None,'discovered_inspections':[],'resolved_discovered_defects':[],
                 'style_and_semantics_preserved':False,'resolved_initial_defects':[],'repair_note':'','pages':[]})
         # Issue IDs are generated, not invented by the model.
         table_result=next(g.get('result') or {} for g in gates if g['id']=='table-layout')

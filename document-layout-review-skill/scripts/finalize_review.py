@@ -94,7 +94,13 @@ def validate_release(manifest, visual):
     for name,result in rechecks.items():
         if result.get('status')!='passed':
             raise PolicyError('final-'+name+'-failed','交付前当前文档重新核验未通过。',gate=name,issues=result.get('issues',[]))
-    image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages)
+    from visual_evidence import checked_file, VisualError
+    try:
+        if (v.get('figures') or {}).get('objects') or m.get('image_discovery_ledger'):
+            checked_file(m.get('image_discovery_ledger'))
+    except VisualError as exc:
+        raise PolicyError(exc.code,str(exc),**exc.details) from exc
+    image_result=validate_final(source,candidate,m['initial_visual_review'],v.get('figures') or {},pages,m.get('image_discovery_ledger'))
     outstanding=review_findings(gate_map['table-layout']);decisions=v.get('table_reviews',[])
     if not isinstance(decisions,list) or len(decisions)!=len(outstanding) or {r.get('issue_sha256') for r in decisions}!=set(outstanding):
         raise PolicyError('table-review-missing','表格语义 review 候选未逐项说明是否需要合并或保留。',expected=list(outstanding))
@@ -111,6 +117,7 @@ def finalize(manifest,visual,out):
     protected={candidate.resolve(),Path(m['source']).resolve(),Path(m['template']).resolve()}
     for key in ('template_style_json','content_plan','text_rules','initial_visual_review','runtime_preflight'):
         if m.get(key):protected.add(Path(m[key]).resolve())
+    if m.get('image_discovery_ledger'):protected.add(Path(m['image_discovery_ledger']['path']).resolve())
     for gate in m.get('gates',[]):protected.add(Path(gate['report']).resolve())
     for page in (m.get('render') or {}).get('pages',[]):protected.add(Path(page['path']).resolve())
     for key in ('pdf','report_path'):

@@ -1,0 +1,4 @@
+{
+  "command": ["{python}", "{scripts}/vision_http_worker.py"],
+  "timeout_seconds": 180
+}
