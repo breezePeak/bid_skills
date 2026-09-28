@@ -22,9 +22,10 @@ for item in request['images']:
 checks = ('text_inside_bounds', 'no_overlap', 'readable', 'not_clipped', 'connections_correct', 'no_embedded_caption')
 rows = [{'view_id': ident, 'observation': 'TEST DOUBLE: scripted observation, not a model finding.',
          'checks': {k: 'pass' for k in checks}} for ident in request['required_view_ids']]
-response = {'_test_double': True, 'request_id': request['request_id'], 'image_type': 'diagram',
-    'observation': 'TEST DOUBLE: scripted fixture verdict only.', 'semantics_preserved': True,
-    'page_match': True, 'views': rows, 'findings': []}
+response = {'_test_double': True, 'request_id': request['request_id'],
+    'seen_image_ids': list(request.get('required_image_ids', [])),
+    'image_type': 'diagram', 'observation': 'TEST DOUBLE: scripted fixture verdict only.',
+    'semantics_preserved': True, 'page_match': True, 'views': rows, 'findings': []}
 if mode in ('fail', 'contradictory') or mode == 'second-fail' and request['role'] == 'final-independent':
     target = next(r for r in rows if r['view_id'].endswith('/edge-right'))
     if mode != 'contradictory':
@@ -44,6 +45,10 @@ if mode == 'unlocated-fail':
     rows[0]['checks']['text_inside_bounds'] = 'fail'
 if mode == 'wrong-id':
     response['request_id'] = 'wrong'
+if mode == 'missing-seen-images':
+    response.pop('seen_image_ids', None)
+if mode == 'partial-seen-images' and response['seen_image_ids']:
+    response['seen_image_ids'].pop()
 if mode == 'page-mismatch':
     response['page_match'] = False
 if mode == 'semantic-mismatch':

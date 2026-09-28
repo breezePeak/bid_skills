@@ -1,4 +1,9 @@
 {
   "command": ["{python}", "{scripts}/vision_http_worker.py"],
-  "timeout_seconds": 180
+  "timeout_seconds": 180,
+  "reviewer": {
+    "kind": "vision_model",
+    "provider": "approved-http-provider",
+    "model_env": "DLR_VISION_MODEL"
+  }
 }

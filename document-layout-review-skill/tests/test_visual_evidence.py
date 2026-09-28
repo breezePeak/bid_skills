@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,6 @@ class VisualEvidenceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.image = self.root / 'image.png'
-        # Small geometric fixture; this suite does not pretend to run a vision model.
         Image.new('RGB', (120, 90), (240, 245, 249)).save(self.image)
         self.page = self.root / 'page.png'
         Image.new('RGB', (220, 300), 'white').save(self.page)
@@ -40,7 +40,17 @@ class VisualEvidenceTests(unittest.TestCase):
             pages=self.pages if final else (), originals=[self.image] if final else ())
 
     def worker(self, mode='pass', timeout=10):
-        return {'command': [sys.executable, str(HERE / 'fake_vision_worker.py'), mode], 'timeout_seconds': timeout, 'allow_test_double': True}
+        return {
+            'command': [sys.executable, str(HERE / 'fake_vision_worker.py'), mode],
+            'timeout_seconds': timeout,
+            'allow_test_double': True,
+            'reviewer': {
+                'kind': 'vision_model',
+                'provider': 'unit-test',
+                'model': 'fake-vision-worker',
+                'test_double': True,
+            },
+        }
 
     def run_review(self, mode='pass', final=False, binding=None):
         return ve.run(self.prepare(final, binding), self.worker(mode), self.root)
@@ -49,7 +59,7 @@ class VisualEvidenceTests(unittest.TestCase):
         return ve.validate_inspection(*a, **kw, allow_test_double=True)
 
     def test_marked_mock_cannot_be_used_for_production_acceptance(self):
-        with self.assertRaisesRegex(ve.VisualError, '模拟视觉输出'):
+        with self.assertRaisesRegex(ve.VisualError, '模拟视觉'):
             ve.validate_inspection(self.run_review())
 
     def revise(self, ref, callback):
@@ -100,18 +110,32 @@ class VisualEvidenceTests(unittest.TestCase):
         with self.assertRaises(ve.VisualError):
             ve.validate_bundle(ref)
 
-    def test_no_worker_no_pass(self):
-        with self.assertRaisesRegex(ve.VisualError, '没有可调用'):
+    def test_no_worker_creates_host_model_block_not_pass(self):
+        with self.assertRaises(ve.VisualError):
             ve.run(self.prepare(), None, self.root)
 
     def test_invalid_command_type_rejected(self):
         with self.assertRaises(ve.VisualError):
-            ve.load_worker({'command': 'echo pass'})
+            ve.load_worker({'command': 'echo pass', 'reviewer': {'kind':'vision_model','provider':'x','model':'y'}})
+
+    def test_worker_without_vision_model_identity_rejected(self):
+        config = {'command':[sys.executable, str(HERE / 'fake_vision_worker.py'), 'pass'], 'timeout_seconds':10, 'allow_test_double':True}
+        with self.assertRaisesRegex(ve.VisualError, 'reviewer|视觉'):
+            ve.run(self.prepare(), config, self.root)
+
+    def test_model_env_identity_is_resolved(self):
+        config = self.worker()
+        config['reviewer'] = {'kind':'vision_model','provider':'unit-test','model_env':'DLR_TEST_VISION_MODEL','test_double':True}
+        with patch.dict(os.environ, {'DLR_TEST_VISION_MODEL':'fake-env-model'}):
+            _, _, reviewer = ve.load_worker(config)
+        self.assertEqual(reviewer['model'], 'fake-env-model')
 
     def test_initial_real_subprocess_receipt(self):
         result = self.validate(self.run_review())
         self.assertEqual(result['verdict'], 'pass')
         self.assertEqual(result['phase'], 'initial')
+        self.assertEqual(result['vision_models'][0]['kind'], 'vision_model')
+        self.assertEqual(result['vision_models'][0]['model'], 'fake-vision-worker')
 
     def test_final_one_fresh_blind_request(self):
         ref = self.run_review(final=True); data = ve.read(ve.checked_file(ref))
@@ -121,7 +145,19 @@ class VisualEvidenceTests(unittest.TestCase):
         self.assertNotIn('observation', request)
         self.assertNotIn('previous_result', request)
         self.assertGreater(len(request['images']), len(request['required_view_ids']))
+        self.assertEqual(set(request['required_image_ids']), {x['id'] for x in request['images']})
         self.assertEqual(self.validate(ref)['verdict'], 'pass')
+
+    def test_model_must_acknowledge_all_images(self):
+        for mode in ('missing-seen-images', 'partial-seen-images'):
+            with self.subTest(mode=mode), self.assertRaises(ve.VisualError):
+                self.run_review(mode, final=True)
+
+    def test_receipt_without_vision_model_proof_rejected(self):
+        ref = self.run_review()
+        ref = self.revise(ref, lambda d: d['calls'][0].pop('vision_models'))
+        with self.assertRaisesRegex(ve.VisualError, '视觉大模型|vision'):
+            self.validate(ref)
 
     def test_current_final_review_detecting_defect_blocks(self):
         result = self.validate(self.run_review('fail', final=True))
@@ -163,7 +199,7 @@ class VisualEvidenceTests(unittest.TestCase):
 
     def test_invalid_classification_rejected(self):
         with self.assertRaises(ve.VisualError):
-            ve.evaluate({'request_id':'same','image_type':'invalid','observation':'x'}, {'request_id':'same'})
+            ve.evaluate({'request_id':'same','seen_image_ids':[],'image_type':'invalid','observation':'x'}, {'request_id':'same','required_image_ids':[],'required_view_ids':[]})
 
     def test_stale_candidate_binding_rejected(self):
         ref = self.run_review()
@@ -195,7 +231,8 @@ class VisualEvidenceTests(unittest.TestCase):
     def test_text_only_request_with_refreshed_hash_rejected(self):
         ref = self.run_review(); data = ve.read(ve.checked_file(ref)); call = data['calls'][0]
         request_path = ve.checked_file(call['request']); request = ve.read(request_path)
-        request['images'] = []; ve.write(request_path, request)
+        request['images'] = []; request['required_image_ids'] = []
+        ve.write(request_path, request)
         call['request'] = ve.reference(request_path); ve.write(ref['path'], data)
         with self.assertRaisesRegex(ve.VisualError, '实际请求没有包含'):
             self.validate(ve.reference(ref['path']))
@@ -280,4 +317,4 @@ class VisualEvidenceTests(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
-# DLR_SINGLE_FINAL_TESTS
+# DLR_VISION_MODEL_HARD_GATE_TESTS
